@@ -241,13 +241,43 @@
 
       <div id="resMsg" class="msg warn" style="display:none;margin-top:10px"></div>
 
+      <!-- ✅ NUEVO: Comparativo mensual (todas las empresas) -->
+      <div class="card" style="padding:14px;margin-top:12px">
+        <div class="sectionTitle">
+          <h2 style="font-size:14px;margin:0">Comparativo mensual (todas las empresas)</h2>
+          <span class="small">Click en “Desglose” para ver conceptos del mes</span>
+        </div>
+        <div style="margin-top:10px;max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:12px">
+          <table id="cmpMonthly">
+            <thead>
+              <tr>
+                <th>Empresa</th>
+                <th class="right">KPI mes%</th>
+                <th class="right">Semanas</th>
+                <th>Desglose</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="grid2" style="margin-top:12px">
         <div class="card" style="padding:14px">
-          <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Empresa (semanas)</h2><span class="small" id="resCompanyKpi"></span></div>
+          <div class="sectionTitle">
+            <h2 style="font-size:14px;margin:0">Empresa (semanas)</h2>
+            <span class="small" id="resCompanyKpi"></span>
+          </div>
           <div style="margin-top:10px;max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:12px">
             <table id="resWeeksTable">
               <thead>
-                <tr><th>Semana</th><th>Fechas</th><th class="right">KPI%</th><th class="right">Conceptos</th></tr>
+                <tr>
+                  <th>Semana</th>
+                  <th>Fechas</th>
+                  <th class="right">KPI%</th>
+                  <th class="right">Conceptos</th>
+                  <th>Desglose</th>
+                </tr>
               </thead>
               <tbody></tbody>
             </table>
@@ -255,7 +285,21 @@
         </div>
 
         <div class="card" style="padding:14px">
-          <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Ranking empleados (mes)</h2><span class="small" id="resEmpCount"></span></div>
+          <div class="sectionTitle">
+            <h2 style="font-size:14px;margin:0">Ranking empleados</h2>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <span class="small" id="resEmpCount"></span>
+              <select id="empWeekView" style="padding:8px 10px;border-radius:999px;border:1px solid var(--border);font-size:12px">
+                <option value="mes" selected>Mes (promedio)</option>
+                <option value="1">Semana 1</option>
+                <option value="2">Semana 2</option>
+                <option value="3">Semana 3</option>
+                <option value="4">Semana 4</option>
+                <option value="5">Semana 5</option>
+              </select>
+            </div>
+          </div>
+
           <div style="margin-top:10px;max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:12px">
             <table id="resEmpRank">
               <thead>
@@ -388,7 +432,7 @@ function normalizeSpaces(s){
 
 /** ==============================
  *  Modelo de datos guardado
- *  data[year][month][company][week] = { start, end, companyText, employeeText, parsedCompany, parsedEmployees }
+ *  data[year][month][key(company||week)] = record
  *  ============================== */
 function loadData(){
   try{
@@ -408,15 +452,12 @@ function makeKey(company, week){ return company + "||" + week; }
 
 /** ==============================
  *  Parsers (JS)
- *  - Empresa: tabla con Conceptos/Meta/Obtenido/Avance
- *  - Empleados: bloques Agenda: ... + Calificacion obtenida: xx %
  *  ============================== */
 function parseCompanyPaste(text){
   const warnings=[], errors=[];
   const lines = String(text||"").split(/\r?\n/).map(normalizeSpaces).filter(Boolean);
   if(lines.length===0) return {rows:[], totals:{metaSum:0,obtainedSum:0,kpi:null}, warnings, errors:["Pegado de empresa vacío."]};
 
-  // detectar header
   let startIdx = lines.findIndex(l=>{
     const x=l.toLowerCase();
     return x.includes("conceptos") && x.includes("meta") && x.includes("obtenido");
@@ -430,14 +471,12 @@ function parseCompanyPaste(text){
   for(let i=startIdx;i<lines.length;i++){
     const line = lines[i];
 
-    // footer tipo "50.79% 100% - -"
     const mFooter = line.match(/([0-9]+(?:\.[0-9]+)?)\s*%/);
     if(mFooter && line.includes("-")){
       kpiReported = Number(mFooter[1]);
       continue;
     }
 
-    // separar por tabs o múltiples espacios
     let cols = line.split(/\t+/).map(normalizeSpaces).filter(Boolean);
     if(cols.length<3) cols = line.split(/\s{2,}/).map(normalizeSpaces).filter(Boolean);
     if(cols.length<3) continue;
@@ -445,7 +484,6 @@ function parseCompanyPaste(text){
     const concept = cols[0];
     if(!/[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(concept)) continue;
 
-    // Meta puede venir "4.9 (70%)"
     const metaRaw = cols[1] || "";
     const metaMatch = metaRaw.match(/^([0-9]+(?:\.[0-9]+)?)(\s*\(.+\))?$/);
     const meta = metaMatch ? safeNum(metaMatch[1]) : safeNum(metaRaw);
@@ -488,7 +526,6 @@ function parseEmployeesPaste(text){
     const agenda = Number((block[0].match(/^agenda:\s*(\d+)/i)||[])[1] || NaN);
     const agendaVal = isFinite(agenda)?agenda:null;
 
-    // nombre = primera línea “normal” en primeras 10 líneas
     let name="SIN NOMBRE";
     for(let i=1;i<Math.min(block.length,10);i++){
       const l=block[i];
@@ -499,7 +536,6 @@ function parseEmployeesPaste(text){
       }
     }
 
-    // calif
     let calif=null;
     for(const l of block){
       const m=l.match(/^calificacion\s+obtenida:\s*([0-9]+(?:\.[0-9]+)?)\s*%/i);
@@ -583,11 +619,9 @@ function preview(){
 
   $("previewArea").style.display="block";
 
-  // msgs
   setMsg($("companyPreviewMsg"), c.errors[0] || c.warnings[0] || "", c.errors.length?"bad":(c.warnings.length?"warn":"ok"));
   setMsg($("empPreviewMsg"), e.errors[0] || e.warnings[0] || "", e.errors.length?"bad":(e.warnings.length?"warn":"ok"));
 
-  // kpis company
   const kpiWrap = $("companyKpis");
   kpiWrap.innerHTML="";
   const boxes = [
@@ -602,7 +636,6 @@ function preview(){
     kpiWrap.appendChild(d);
   });
 
-  // table company
   const tb = $("companyTable").querySelector("tbody");
   tb.innerHTML="";
   c.rows.forEach(r=>{
@@ -616,7 +649,6 @@ function preview(){
     tb.appendChild(tr);
   });
 
-  // employees
   $("empCount").textContent = e.employees.length ? (e.employees.length + " empleados") : "";
   const top = topEmployees(e.employees,5);
   const topWrap = $("top5");
@@ -751,7 +783,92 @@ function buildResults(){
   const data = loadData();
   const bucket = (((data||{})[year]||{})[month]||{});
 
-  // 1) Empresa por semanas
+  // Helper: agrega conceptos del mes (sum meta + sum obtenido) por empresa
+  function aggregateMonthlyConcepts(companyName){
+    const map = new Map(); // concept -> {metaSum, obtainedSum, metaNote}
+    let weeksUsed=0;
+
+    for(let w=1; w<=5; w++){
+      const rec = bucket[makeKey(companyName, String(w))];
+      if(!rec || !rec.parsedCompany || !rec.parsedCompany.rows) continue;
+      weeksUsed++;
+
+      rec.parsedCompany.rows.forEach(r=>{
+        const key=r.concept;
+        if(!map.has(key)) map.set(key, {metaSum:0, obtainedSum:0, metaNote:r.metaNote||null});
+        const o=map.get(key);
+        o.metaSum += (r.meta||0);
+        o.obtainedSum += (r.obtained||0);
+        if(r.metaNote) o.metaNote = r.metaNote;
+      });
+    }
+
+    const rows = [...map.entries()].map(([concept,o])=>{
+      const avance = o.metaSum>0 ? (o.obtainedSum/o.metaSum)*100 : null;
+      return {concept, meta:o.metaSum, obtained:o.obtainedSum, avance, metaNote:o.metaNote};
+    });
+
+    // KPI mensual: promedio de KPI semanales guardados
+    const kpis=[];
+    for(let w=1; w<=5; w++){
+      const rec = bucket[makeKey(companyName, String(w))];
+      const kpi = rec?.parsedCompany?.totals?.kpi ?? null;
+      if(kpi!=null) kpis.push(kpi);
+    }
+    const kpiAvg = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
+
+    return {rows, weeksUsed, kpiAvg};
+  }
+
+  // 0) Comparativo mensual (todas las empresas)
+  const monthlyTbody = $("cmpMonthly").querySelector("tbody");
+  monthlyTbody.innerHTML="";
+
+  const monthlyRows = COMPANIES.map(c=>{
+    const agg = aggregateMonthlyConcepts(c);
+    return {company:c, kpi:agg.kpiAvg, weeks:agg.weeksUsed, concepts:agg.rows};
+  }).sort((a,b)=>(b.kpi??-1)-(a.kpi??-1));
+
+  monthlyRows.forEach(r=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML = `
+      <td>${r.company}</td>
+      <td class="num">${fmtPct(r.kpi)}</td>
+      <td class="num">${r.weeks}</td>
+      <td>
+        <details>
+          <summary style="cursor:pointer;font-weight:800">Desglose</summary>
+          <div style="padding:10px 0">
+            <div style="max-height:240px;overflow:auto;border:1px solid var(--border);border-radius:12px">
+              <table style="width:100%;border-collapse:collapse">
+                <thead>
+                  <tr>
+                    <th>Concepto</th>
+                    <th class="right">Meta (mes)</th>
+                    <th class="right">Obtenido (mes)</th>
+                    <th class="right">Avance%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${(r.concepts||[]).map(x=>`
+                    <tr>
+                      <td>${x.concept}</td>
+                      <td class="num">${x.meta==null?"—":(x.meta.toFixed(2)+(x.metaNote?(" "+x.metaNote):""))}</td>
+                      <td class="num">${x.obtained==null?"—":x.obtained.toFixed(2)}</td>
+                      <td class="num">${x.avance==null?"—":x.avance.toFixed(2)+"%"}</td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </details>
+      </td>
+    `;
+    monthlyTbody.appendChild(tr);
+  });
+
+  // 1) Empresa por semanas + desglose
   const weeksTbody = $("resWeeksTable").querySelector("tbody");
   weeksTbody.innerHTML="";
   let kpis=[];
@@ -761,38 +878,82 @@ function buildResults(){
     const rec = bucket[makeKey(company, String(w))];
     if(!rec) continue;
     hasAny=true;
+
     const kpi = rec.parsedCompany?.totals?.kpi ?? null;
-    kpis.push(kpi);
+    if(kpi!=null) kpis.push(kpi);
+
+    const rows = rec.parsedCompany?.rows || [];
     const tr=document.createElement("tr");
     tr.innerHTML = `
       <td>Semana ${w}</td>
       <td class="mono">${(rec.start||"—")} → ${(rec.end||"—")}</td>
       <td class="num">${fmtPct(kpi)}</td>
-      <td class="num">${rec.parsedCompany?.rows?.length ?? 0}</td>
+      <td class="num">${rows.length}</td>
+      <td>
+        <details>
+          <summary style="cursor:pointer;font-weight:800">Ver</summary>
+          <div style="padding:10px 0">
+            <div style="max-height:240px;overflow:auto;border:1px solid var(--border);border-radius:12px">
+              <table style="width:100%;border-collapse:collapse">
+                <thead>
+                  <tr>
+                    <th>Concepto</th>
+                    <th class="right">Meta</th>
+                    <th class="right">Obtenido</th>
+                    <th class="right">Avance%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${rows.map(r=>`
+                    <tr>
+                      <td>${r.concept}</td>
+                      <td class="num">${r.meta==null?"—":(r.meta.toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
+                      <td class="num">${r.obtained==null?"—":r.obtained.toFixed(2)}</td>
+                      <td class="num">${r.avance==null?"—":r.avance.toFixed(2)+"%"}</td>
+                    </tr>
+                  `).join("")}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </details>
+      </td>
     `;
     weeksTbody.appendChild(tr);
   }
 
-  const avgKpi = kpis.filter(x=>x!=null).reduce((a,b)=>a+b,0) / (kpis.filter(x=>x!=null).length || 1);
+  const avgKpi = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
   $("resCompanyKpi").textContent = hasAny ? ("Promedio mes: " + fmtPct(avgKpi)) : "";
 
-  // 2) Ranking empleados por empresa (promedio por mes)
-  // juntamos calif por empleado a través de semanas guardadas
-  const empMap = new Map(); // name -> {sum, count}
-  for(let w=1; w<=5; w++){
-    const rec = bucket[makeKey(company, String(w))];
-    if(!rec) continue;
-    const emps = rec.parsedEmployees?.employees || [];
-    emps.forEach(e=>{
-      if(e.calif==null) return;
-      const key = e.name;
-      if(!empMap.has(key)) empMap.set(key, {sum:0,count:0});
-      const o = empMap.get(key);
-      o.sum += e.calif; o.count += 1;
-    });
+  // 2) Ranking empleados (Mes o Semana)
+  const view = $("empWeekView") ? $("empWeekView").value : "mes";
+  let empRank=[];
+
+  if(view==="mes"){
+    const empMap = new Map(); // name -> {sum,count}
+    for(let w=1; w<=5; w++){
+      const rec = bucket[makeKey(company, String(w))];
+      if(!rec) continue;
+      const emps = rec.parsedEmployees?.employees || [];
+      emps.forEach(e=>{
+        if(e.calif==null) return;
+        const key=e.name;
+        if(!empMap.has(key)) empMap.set(key, {sum:0,count:0});
+        const o=empMap.get(key);
+        o.sum += e.calif; o.count += 1;
+      });
+    }
+    empRank = [...empMap.entries()]
+      .map(([name,o])=>({name, avg:o.sum/o.count, weeks:o.count}))
+      .sort((a,b)=>b.avg-a.avg);
+  } else {
+    const rec = bucket[makeKey(company, String(view))];
+    const emps = rec?.parsedEmployees?.employees || [];
+    empRank = emps
+      .filter(e=>e.calif!=null)
+      .map(e=>({name:e.name, avg:e.calif, weeks:1}))
+      .sort((a,b)=>b.avg-a.avg);
   }
-  const empRank = [...empMap.entries()].map(([name, o])=>({name, avg:o.sum/o.count, weeks:o.count}))
-    .sort((a,b)=>b.avg-a.avg);
 
   const empTbody = $("resEmpRank").querySelector("tbody");
   empTbody.innerHTML="";
@@ -813,7 +974,6 @@ function buildResults(){
       if(!rec) continue;
       rows.push({week:w, company:c, kpi: rec.parsedCompany?.totals?.kpi ?? null});
     }
-    // orden por KPI desc
     rows.sort((a,b)=>(b.kpi??-1)-(a.kpi??-1));
     rows.forEach(r=>{
       const tr=document.createElement("tr");
@@ -823,7 +983,7 @@ function buildResults(){
   }
 
   // 4) Ranking general (empleados de todas las empresas)
-  const globalMap = new Map(); // key = name||company => {sum,count}
+  const globalMap = new Map();
   for(const c of COMPANIES){
     for(let w=1; w<=5; w++){
       const rec = bucket[makeKey(c, String(w))];
@@ -838,7 +998,8 @@ function buildResults(){
       });
     }
   }
-  const globalRank = [...globalMap.values()].map(o=>({name:o.name, company:o.company, avg:o.sum/o.count, weeks:o.count}))
+  const globalRank = [...globalMap.values()]
+    .map(o=>({name:o.name, company:o.company, avg:o.sum/o.count, weeks:o.count}))
     .sort((a,b)=>b.avg-a.avg);
 
   const gBody = $("globalRank").querySelector("tbody");
@@ -853,7 +1014,7 @@ function buildResults(){
   const bestBody = $("bestByCompany").querySelector("tbody");
   bestBody.innerHTML="";
   for(const c of COMPANIES){
-    const map = new Map(); // name -> {sum,count}
+    const map = new Map();
     for(let w=1; w<=5; w++){
       const rec = bucket[makeKey(c, String(w))];
       if(!rec) continue;
@@ -865,22 +1026,20 @@ function buildResults(){
         o.sum += e.calif; o.count += 1;
       });
     }
-    const arr = [...map.entries()].map(([name,o])=>({name, avg:o.sum/o.count, weeks:o.count}))
+    const arr = [...map.entries()]
+      .map(([name,o])=>({name, avg:o.sum/o.count, weeks:o.count}))
       .sort((a,b)=>b.avg-a.avg);
 
+    const tr=document.createElement("tr");
     if(arr.length===0){
-      const tr=document.createElement("tr");
       tr.innerHTML = `<td>${c}</td><td>—</td><td class="num">—</td><td class="num">0</td>`;
-      bestBody.appendChild(tr);
     }else{
-      const best = arr[0];
-      const tr=document.createElement("tr");
+      const best=arr[0];
       tr.innerHTML = `<td>${c}</td><td>${best.name}</td><td class="num">${fmtPct(best.avg)}</td><td class="num">${best.weeks}</td>`;
-      bestBody.appendChild(tr);
     }
+    bestBody.appendChild(tr);
   }
 
-  // msg
   if(!hasAny){
     setMsg($("resMsg"), "No hay datos guardados para esa empresa/mes. Ve a Datos y guarda semanas.", "warn");
     $("resMsg").style.display="block";
@@ -905,16 +1064,13 @@ function showTab(name){
  *  Init
  *  ============================== */
 (function init(){
-  // fill selects
   fillCompanies($("companySelect"));
   fillCompanies($("resCompany"));
 
-  // tabs
   document.querySelectorAll(".tab").forEach(b=>{
     b.addEventListener("click", ()=>showTab(b.dataset.tab));
   });
 
-  // buttons
   $("btnPreview").addEventListener("click", ()=>preview());
   $("btnSave").addEventListener("click", ()=>{ preview(); saveWeek(); });
   $("btnLoad").addEventListener("click", ()=>loadWeek());
@@ -929,14 +1085,17 @@ function showTab(name){
   });
   $("btnClearAll").addEventListener("click", ()=>clearAll());
 
-  // config
+  // ✅ auto-actualiza ranking al cambiar Semana/Mes
+  if($("empWeekView")){
+    $("empWeekView").addEventListener("change", ()=>buildResults());
+  }
+
   applyMode();
   $("btnSaveConfig").addEventListener("click", ()=>{
     const current = loadCfg();
     const nextMode = $("modeSelect").value;
     const pin = $("modePin").value || "";
 
-    // si va a admin y hay pin guardado, pedirlo
     if(nextMode==="admin" && current.pin){
       const ask = prompt("PIN para entrar a Admin:");
       if(ask !== current.pin){
@@ -954,10 +1113,8 @@ function showTab(name){
     setTimeout(()=> $("cfgMsg").style.display="none", 2000);
   });
 
-  // defaults: set config mode pill
   applyMode();
 })();
 </script>
 </body>
 </html>
-
