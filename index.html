@@ -1,91 +1,963 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>Resultados Semanales</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Herrera | Resultados Semanales</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #f4f4f5;
-      margin: 0;
-      padding: 20px;
+    :root{
+      --bg:#f4f4f5; --card:#fff; --muted:#6b7280; --border:#e5e7eb;
+      --text:#111827; --black:#0b0b0c; --soft:#fafafa; --ok:#16a34a; --warn:#a16207; --bad:#b91c1c;
+      --radius:16px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     }
-    .container {
-      max-width: 1100px;
-      margin: auto;
-      background: white;
-      padding: 20px;
-      border-radius: 10px;
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
+    .wrap{max-width:1200px;margin:0 auto;padding:20px}
+    .topbar{
+      display:flex;align-items:center;justify-content:space-between;gap:12px;
+      background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;
     }
-    h1 {
-      margin-top: 0;
+    .brand h1{margin:0;font-size:22px}
+    .brand p{margin:4px 0 0;color:var(--muted);font-size:13px}
+    .tabs{display:flex;gap:8px;flex-wrap:wrap}
+    .tab{
+      border:1px solid var(--border);background:#fff;padding:10px 12px;border-radius:999px;cursor:pointer;
+      font-weight:600;font-size:13px;
     }
-    .grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 20px;
-      margin-top: 20px;
+    .tab.active{background:var(--black);color:#fff;border-color:var(--black)}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+    .grid{display:grid;gap:12px}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+    @media (max-width: 980px){.grid2,.grid3{grid-template-columns:1fr}}
+    label{display:block;font-size:12px;color:var(--muted);margin:0 0 6px}
+    select,input,textarea{
+      width:100%;padding:10px;border-radius:12px;border:1px solid var(--border);font-size:14px;background:#fff;
     }
-    textarea {
-      width: 100%;
-      height: 260px;
-      padding: 10px;
-      font-family: monospace;
-      border-radius: 8px;
-      border: 1px solid #ccc;
+    textarea{min-height:220px;font-family:var(--mono);font-size:12px}
+    .btnrow{display:flex;gap:10px;flex-wrap:wrap}
+    .btn{
+      padding:10px 14px;border-radius:12px;border:1px solid var(--border);background:#fff;cursor:pointer;font-weight:700;
     }
-    button {
-      margin-top: 20px;
-      padding: 12px 20px;
-      border: none;
-      border-radius: 8px;
-      background: #111;
-      color: white;
-      font-size: 16px;
-      cursor: pointer;
-    }
-    .output {
-      margin-top: 30px;
-      background: #fafafa;
-      padding: 15px;
-      border-radius: 8px;
-      border: 1px solid #ddd;
-      white-space: pre-wrap;
-    }
+    .btn.black{background:var(--black);color:#fff;border-color:var(--black)}
+    .btn.ghost{background:transparent}
+    .btn:disabled{opacity:.45;cursor:not-allowed}
+    .hint{color:var(--muted);font-size:13px;margin:0}
+    .pill{display:inline-block;padding:4px 8px;border-radius:999px;border:1px solid var(--border);font-size:12px;color:var(--muted)}
+    .msg{padding:10px 12px;border-radius:12px;border:1px solid var(--border);background:var(--soft);font-size:13px}
+    .msg.ok{border-color:#bbf7d0;background:#f0fdf4;color:#14532d}
+    .msg.warn{border-color:#fde68a;background:#fffbeb;color:#713f12}
+    .msg.bad{border-color:#fecaca;background:#fef2f2;color:#7f1d1d}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px 8px;border-bottom:1px solid var(--border);font-size:13px;text-align:left;vertical-align:top}
+    th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+    td.num{text-align:right;font-variant-numeric:tabular-nums}
+    .sectionTitle{display:flex;align-items:center;justify-content:space-between;gap:8px}
+    .sectionTitle h2{margin:0;font-size:16px}
+    .small{font-size:12px;color:var(--muted)}
+    .split{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+    .kpi{display:flex;gap:10px;flex-wrap:wrap}
+    .kpi .box{border:1px solid var(--border);border-radius:14px;padding:10px 12px;background:#fff}
+    .kpi .box .t{font-size:12px;color:var(--muted)}
+    .kpi .box .v{font-size:18px;font-weight:800;margin-top:2px}
+    .right{text-align:right}
+    .hr{height:1px;background:var(--border);margin:10px 0}
+    .mono{font-family:var(--mono)}
   </style>
 </head>
 <body>
+<div class="wrap">
 
-<div class="container">
-  <h1>Resultados Semanales</h1>
-  <p>Pega la información tal como sale del sistema.</p>
-
-  <div class="grid">
-    <div>
-      <h3>Pegado Empresa</h3>
-      <textarea id="empresa"></textarea>
+  <div class="topbar">
+    <div class="brand">
+      <h1>Herrera | Resultados</h1>
+      <p>Admin pega datos por empresa/semana. Viewer solo ve resultados.</p>
     </div>
-    <div>
-      <h3>Pegado Empleados</h3>
-      <textarea id="empleados"></textarea>
+    <div class="tabs">
+      <button class="tab active" data-tab="datos">Datos</button>
+      <button class="tab" data-tab="resultados">Resultados</button>
+      <button class="tab" data-tab="config">Config</button>
     </div>
   </div>
 
-  <button onclick="mostrar()">Previsualizar</button>
+  <div style="height:12px"></div>
 
-  <div class="output" id="resultado"></div>
+  <!-- DATOS -->
+  <div id="tab-datos" class="grid">
+
+    <div class="card">
+      <div class="split">
+        <div>
+          <div class="pill" id="modePill">Modo: Admin</div>
+          <p class="hint">En <b>Datos</b> guardas textos por Empresa y Semana. Luego en <b>Resultados</b> se calculan rankings/comparativos.</p>
+        </div>
+        <div class="btnrow">
+          <button class="btn" id="btnExport">Exportar JSON</button>
+          <button class="btn" id="btnImport">Importar JSON</button>
+          <input id="importFile" type="file" accept="application/json" style="display:none" />
+          <button class="btn ghost" id="btnClearAll" title="Borra todo local">Borrar todo (local)</button>
+        </div>
+      </div>
+      <div id="msgTop" class="msg" style="display:none;margin-top:10px"></div>
+    </div>
+
+    <div class="card">
+      <div class="sectionTitle">
+        <h2>Entrada de datos</h2>
+        <div class="small">Guardado local automático</div>
+      </div>
+      <div class="hr"></div>
+
+      <div class="grid3">
+        <div>
+          <label>Empresa</label>
+          <select id="companySelect"></select>
+        </div>
+        <div>
+          <label>Año</label>
+          <input id="yearInput" type="number" value="2026" />
+        </div>
+        <div>
+          <label>Mes (1–12)</label>
+          <input id="monthInput" type="number" min="1" max="12" value="1" />
+        </div>
+      </div>
+
+      <div class="grid3">
+        <div>
+          <label>Semana del mes</label>
+          <select id="weekSelect">
+            <option value="1">Semana 1</option>
+            <option value="2">Semana 2</option>
+            <option value="3">Semana 3</option>
+            <option value="4">Semana 4</option>
+            <option value="5">Semana 5</option>
+          </select>
+        </div>
+        <div>
+          <label>Fecha inicio (Lun)</label>
+          <input id="weekStart" type="date" />
+        </div>
+        <div>
+          <label>Fecha fin (Sáb / cierre)</label>
+          <input id="weekEnd" type="date" />
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div>
+          <label>Pegado Empresa (tabla de conceptos)</label>
+          <textarea id="pasteCompany" placeholder="Pega aquí la tabla de empresa (Conceptos, Meta, Obtenido, ... Avance%)"></textarea>
+        </div>
+        <div>
+          <label>Pegado Empleados (bloques Agenda / Calificación)</label>
+          <textarea id="pasteEmployees" placeholder="Pega aquí los bloques de empleados (Agenda: ... Nombre ... Calificacion obtenida: ...)"></textarea>
+        </div>
+      </div>
+
+      <div class="btnrow">
+        <button class="btn" id="btnPreview">Previsualizar</button>
+        <button class="btn black" id="btnSave">Guardar Semana</button>
+        <button class="btn" id="btnLoad">Cargar Semana</button>
+        <button class="btn ghost" id="btnClearWeek">Limpiar cajas</button>
+      </div>
+
+      <div id="previewArea" class="grid" style="margin-top:12px;display:none">
+        <div class="grid2">
+          <div class="card" style="padding:14px">
+            <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Preview Empresa</h2><span class="small" id="companyKpiHint"></span></div>
+            <div id="companyPreviewMsg" class="msg" style="display:none;margin-top:10px"></div>
+            <div id="companyKpis" class="kpi" style="margin-top:10px"></div>
+            <div style="margin-top:10px;max-height:280px;overflow:auto;border:1px solid var(--border);border-radius:12px">
+              <table id="companyTable">
+                <thead>
+                  <tr>
+                    <th>Concepto</th><th class="right">Meta</th><th class="right">Obtenido</th><th class="right">Avance%</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card" style="padding:14px">
+            <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Preview Empleados</h2><span class="small" id="empCount"></span></div>
+            <div id="empPreviewMsg" class="msg" style="display:none;margin-top:10px"></div>
+
+            <div style="margin-top:10px">
+              <div class="small" style="font-weight:700;color:var(--text)">Top 5 (calificación)</div>
+              <div id="top5" class="grid" style="gap:8px;margin-top:8px"></div>
+            </div>
+
+            <div style="margin-top:10px;max-height:280px;overflow:auto;border:1px solid var(--border);border-radius:12px">
+              <table id="empTable">
+                <thead>
+                  <tr><th>Empleado</th><th class="right">Agenda</th><th class="right">Calificación</th></tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <p class="hint" style="margin-top:10px">
+        Tip: si quieres que el viewer vea EXACTAMENTE lo mismo, usa <b>Exportar JSON</b> (admin) y luego <b>Importar JSON</b> (viewer).
+      </p>
+    </div>
+
+  </div>
+
+  <!-- RESULTADOS -->
+  <div id="tab-resultados" class="grid" style="display:none">
+
+    <div class="card">
+      <div class="sectionTitle">
+        <h2>Resultados</h2>
+        <span class="small">Se calcula con lo guardado en “Datos”</span>
+      </div>
+      <div class="hr"></div>
+
+      <div class="grid3">
+        <div>
+          <label>Empresa</label>
+          <select id="resCompany"></select>
+        </div>
+        <div>
+          <label>Año</label>
+          <input id="resYear" type="number" value="2026" />
+        </div>
+        <div>
+          <label>Mes</label>
+          <input id="resMonth" type="number" min="1" max="12" value="1" />
+        </div>
+      </div>
+
+      <div class="btnrow">
+        <button class="btn black" id="btnBuild">Actualizar resultados</button>
+      </div>
+
+      <div id="resMsg" class="msg warn" style="display:none;margin-top:10px"></div>
+
+      <div class="grid2" style="margin-top:12px">
+        <div class="card" style="padding:14px">
+          <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Empresa (semanas)</h2><span class="small" id="resCompanyKpi"></span></div>
+          <div style="margin-top:10px;max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:12px">
+            <table id="resWeeksTable">
+              <thead>
+                <tr><th>Semana</th><th>Fechas</th><th class="right">KPI%</th><th class="right">Conceptos</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card" style="padding:14px">
+          <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Ranking empleados (mes)</h2><span class="small" id="resEmpCount"></span></div>
+          <div style="margin-top:10px;max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:12px">
+            <table id="resEmpRank">
+              <thead>
+                <tr><th>#</th><th>Empleado</th><th class="right">Promedio%</th><th class="right">Semanas</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid2" style="margin-top:12px">
+        <div class="card" style="padding:14px">
+          <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Comparativo semanal (todas las empresas)</h2></div>
+          <div style="margin-top:10px;max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:12px">
+            <table id="cmpWeekly">
+              <thead>
+                <tr><th>Semana</th><th>Empresa</th><th class="right">KPI%</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card" style="padding:14px">
+          <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Ranking general (todas las empresas)</h2></div>
+          <div style="margin-top:10px;max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:12px">
+            <table id="globalRank">
+              <thead>
+                <tr><th>#</th><th>Empleado</th><th>Empresa</th><th class="right">Promedio%</th><th class="right">Semanas</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:14px;margin-top:12px">
+        <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Mejor vendedor por empresa (mes)</h2></div>
+        <div style="margin-top:10px;max-height:360px;overflow:auto;border:1px solid var(--border);border-radius:12px">
+          <table id="bestByCompany">
+            <thead>
+              <tr><th>Empresa</th><th>Empleado</th><th class="right">Promedio%</th><th class="right">Semanas</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- CONFIG -->
+  <div id="tab-config" class="grid" style="display:none">
+    <div class="card">
+      <div class="sectionTitle">
+        <h2>Config</h2>
+        <span class="small">Modo Admin/Viewer (solo para evitar edición accidental)</span>
+      </div>
+      <div class="hr"></div>
+
+      <div class="grid2">
+        <div>
+          <label>Modo</label>
+          <select id="modeSelect">
+            <option value="admin">Admin (puede guardar)</option>
+            <option value="viewer">Viewer (solo ver)</option>
+          </select>
+          <p class="hint" style="margin-top:8px">
+            Esto no es seguridad real (GitHub Pages no tiene backend), pero ayuda a que el viewer no edite por accidente.
+          </p>
+        </div>
+
+        <div>
+          <label>Clave simple (opcional)</label>
+          <input id="modePin" type="password" placeholder="Ej: 1234" />
+          <p class="hint" style="margin-top:8px">Si pones pin, al cambiar a Admin lo pedirá.</p>
+        </div>
+      </div>
+
+      <div class="btnrow">
+        <button class="btn black" id="btnSaveConfig">Guardar Config</button>
+      </div>
+
+      <div id="cfgMsg" class="msg ok" style="display:none;margin-top:10px"></div>
+    </div>
+  </div>
+
 </div>
 
 <script>
-function mostrar() {
-  const empresa = document.getElementById("empresa").value;
-  const empleados = document.getElementById("empleados").value;
+/** ==============================
+ *  Config / Constantes
+ *  ============================== */
+const COMPANIES = [
+  'HERRERA MOTORS SUR',
+  'HERRERA MOTORS NORTE',
+  'SEMINUEVOS',
+  'EUROFRANCE AUTOS DE AGUASCALIENTES',
+  'AMERITALI AUTOS SA DE CV',
+  'SEMINUEVOS SUR',
+  'HERRERA MOTORS LEATS',
+  'LEATS SEMINUEVOS',
+  'SEMINUEVOS 1ER ANILLO',
+  'GAC',
+  'FLOTILLAS',
+  'CENTROS COMERCIALES',
+  'ENTRENAMIENTO',
+  'SU AUTO'
+];
 
-  document.getElementById("resultado").innerText =
-    "=== EMPRESA ===\n" + empresa +
-    "\n\n=== EMPLEADOS ===\n" + empleados;
+const STORAGE_KEY = "herrera_reportes_v1";
+const CFG_KEY = "herrera_cfg_v1";
+
+function $(id){ return document.getElementById(id); }
+function fmtPct(n){
+  if(n==null || !isFinite(n)) return "—";
+  return n.toFixed(2) + "%";
 }
-</script>
+function safeNum(s){
+  if(s==null) return null;
+  const t = String(s).replace(/,/g,"").replace(/[^\d.\-]/g,"").trim();
+  if(!t) return null;
+  const n = Number(t);
+  return isFinite(n) ? n : null;
+}
+function normalizeSpaces(s){
+  return String(s).replace(/\u00a0/g," ").replace(/[ \t]+/g," ").trim();
+}
 
+/** ==============================
+ *  Modelo de datos guardado
+ *  data[year][month][company][week] = { start, end, companyText, employeeText, parsedCompany, parsedEmployees }
+ *  ============================== */
+function loadData(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  }catch(e){ return {}; }
+}
+function saveData(obj){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
+}
+function getBucket(data, year, month){
+  data[year] ??= {};
+  data[year][month] ??= {};
+  return data[year][month];
+}
+function makeKey(company, week){ return company + "||" + week; }
+
+/** ==============================
+ *  Parsers (JS)
+ *  - Empresa: tabla con Conceptos/Meta/Obtenido/Avance
+ *  - Empleados: bloques Agenda: ... + Calificacion obtenida: xx %
+ *  ============================== */
+function parseCompanyPaste(text){
+  const warnings=[], errors=[];
+  const lines = String(text||"").split(/\r?\n/).map(normalizeSpaces).filter(Boolean);
+  if(lines.length===0) return {rows:[], totals:{metaSum:0,obtainedSum:0,kpi:null}, warnings, errors:["Pegado de empresa vacío."]};
+
+  // detectar header
+  let startIdx = lines.findIndex(l=>{
+    const x=l.toLowerCase();
+    return x.includes("conceptos") && x.includes("meta") && x.includes("obtenido");
+  });
+  if(startIdx===-1){ warnings.push("No detecté header exacto; intentaré parsear igual."); startIdx=0; }
+  else startIdx += 1;
+
+  const rows=[];
+  let kpiReported=null;
+
+  for(let i=startIdx;i<lines.length;i++){
+    const line = lines[i];
+
+    // footer tipo "50.79% 100% - -"
+    const mFooter = line.match(/([0-9]+(?:\.[0-9]+)?)\s*%/);
+    if(mFooter && line.includes("-")){
+      kpiReported = Number(mFooter[1]);
+      continue;
+    }
+
+    // separar por tabs o múltiples espacios
+    let cols = line.split(/\t+/).map(normalizeSpaces).filter(Boolean);
+    if(cols.length<3) cols = line.split(/\s{2,}/).map(normalizeSpaces).filter(Boolean);
+    if(cols.length<3) continue;
+
+    const concept = cols[0];
+    if(!/[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(concept)) continue;
+
+    // Meta puede venir "4.9 (70%)"
+    const metaRaw = cols[1] || "";
+    const metaMatch = metaRaw.match(/^([0-9]+(?:\.[0-9]+)?)(\s*\(.+\))?$/);
+    const meta = metaMatch ? safeNum(metaMatch[1]) : safeNum(metaRaw);
+    const metaNote = metaMatch && metaMatch[2] ? metaMatch[2].trim() : null;
+
+    const obtained = safeNum(cols[2] || "");
+    const avance = safeNum(cols[5] ?? cols[3] ?? "");
+
+    rows.push({concept, meta, obtained, avance, metaNote});
+  }
+
+  if(rows.length===0) errors.push("No detecté filas de conceptos. Revisa el pegado.");
+
+  const metaSum = rows.reduce((a,r)=>a+(r.meta||0),0);
+  const obtainedSum = rows.reduce((a,r)=>a+(r.obtained||0),0);
+  const kpiCalc = metaSum>0 ? (obtainedSum/metaSum)*100 : null;
+  const kpi = (kpiReported!=null) ? kpiReported : kpiCalc;
+  if(kpiReported==null) warnings.push("No detecté KPI reportado (footer). Usaré KPI calculado.");
+
+  return { rows, totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported}, warnings, errors };
+}
+
+function parseEmployeesPaste(text){
+  const warnings=[], errors=[];
+  const lines = String(text||"").split(/\r?\n/).map(normalizeSpaces).filter(Boolean);
+  if(lines.length===0) return {employees:[], warnings, errors:["Pegado de empleados vacío."]};
+
+  const starts=[];
+  for(let i=0;i<lines.length;i++){
+    if(/^agenda:\s*\d+/i.test(lines[i])) starts.push(i);
+  }
+  if(starts.length===0) return {employees:[], warnings, errors:["No encontré bloques que empiecen con 'Agenda:'"]};
+
+  const employees=[];
+  for(let s=0;s<starts.length;s++){
+    const start=starts[s];
+    const end=(s+1<starts.length)?starts[s+1]:lines.length;
+    const block=lines.slice(start,end);
+
+    const agenda = Number((block[0].match(/^agenda:\s*(\d+)/i)||[])[1] || NaN);
+    const agendaVal = isFinite(agenda)?agenda:null;
+
+    // nombre = primera línea “normal” en primeras 10 líneas
+    let name="SIN NOMBRE";
+    for(let i=1;i<Math.min(block.length,10);i++){
+      const l=block[i];
+      if(/^calificacion\s+obtenida/i.test(l)) continue;
+      if(/^concepto\b/i.test(l)) continue;
+      if(/[a-zA-ZáéíóúñÁÉÍÓÚÑ]/.test(l) && !/:/.test(l)){
+        name=l; break;
+      }
+    }
+
+    // calif
+    let calif=null;
+    for(const l of block){
+      const m=l.match(/^calificacion\s+obtenida:\s*([0-9]+(?:\.[0-9]+)?)\s*%/i);
+      if(m){ calif=Number(m[1]); break; }
+    }
+
+    employees.push({name, agenda:agendaVal, calif});
+  }
+
+  const valid = employees.filter(e=>e.name!=="SIN NOMBRE" && e.calif!=null).length;
+  if(valid===0) errors.push("No detecté empleados válidos (nombre+calificación). Revisa el pegado.");
+
+  return { employees, warnings, errors };
+}
+
+function topEmployees(employees, n=5){
+  return [...employees].filter(e=>e.calif!=null).sort((a,b)=>(b.calif||-1)-(a.calif||-1)).slice(0,n);
+}
+
+/** ==============================
+ *  UI helpers
+ *  ============================== */
+function setMsg(el, text, type){
+  if(!text){ el.style.display="none"; el.textContent=""; el.className="msg"; return; }
+  el.style.display="block";
+  el.textContent=text;
+  el.className="msg " + (type||"");
+}
+
+function fillCompanies(selectEl){
+  selectEl.innerHTML = "";
+  for(const c of COMPANIES){
+    const opt=document.createElement("option");
+    opt.value=c; opt.textContent=c;
+    selectEl.appendChild(opt);
+  }
+}
+
+function currentKeyFromInputs(){
+  const company = $("companySelect").value;
+  const year = String($("yearInput").value||"");
+  const month = String($("monthInput").value||"");
+  const week = String($("weekSelect").value||"");
+  return {company, year, month, week};
+}
+
+/** ==============================
+ *  Mode (admin/viewer)
+ *  ============================== */
+function loadCfg(){
+  try{ return JSON.parse(localStorage.getItem(CFG_KEY) || "{}"); }catch(e){ return {}; }
+}
+function saveCfg(cfg){
+  localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
+}
+function applyMode(){
+  const cfg = loadCfg();
+  const mode = cfg.mode || "admin";
+  $("modeSelect").value = mode;
+  $("modePin").value = cfg.pin || "";
+  $("modePill").textContent = "Modo: " + (mode==="admin" ? "Admin" : "Viewer");
+  const isAdmin = mode==="admin";
+  $("btnSave").disabled = !isAdmin;
+  $("btnClearAll").disabled = !isAdmin;
+  $("btnClearWeek").disabled = !isAdmin;
+  $("pasteCompany").disabled = !isAdmin;
+  $("pasteEmployees").disabled = !isAdmin;
+  $("weekStart").disabled = !isAdmin;
+  $("weekEnd").disabled = !isAdmin;
+}
+
+/** ==============================
+ *  Datos tab actions
+ *  ============================== */
+function preview(){
+  const pc = $("pasteCompany").value;
+  const pe = $("pasteEmployees").value;
+
+  const c = parseCompanyPaste(pc);
+  const e = parseEmployeesPaste(pe);
+
+  $("previewArea").style.display="block";
+
+  // msgs
+  setMsg($("companyPreviewMsg"), c.errors[0] || c.warnings[0] || "", c.errors.length?"bad":(c.warnings.length?"warn":"ok"));
+  setMsg($("empPreviewMsg"), e.errors[0] || e.warnings[0] || "", e.errors.length?"bad":(e.warnings.length?"warn":"ok"));
+
+  // kpis company
+  const kpiWrap = $("companyKpis");
+  kpiWrap.innerHTML="";
+  const boxes = [
+    ["KPI usado", fmtPct(c.totals.kpi)],
+    ["Meta sum", (c.totals.metaSum||0).toFixed(2)],
+    ["Obtenido sum", (c.totals.obtainedSum||0).toFixed(2)],
+  ];
+  boxes.forEach(([t,v])=>{
+    const d=document.createElement("div");
+    d.className="box";
+    d.innerHTML=`<div class="t">${t}</div><div class="v">${v}</div>`;
+    kpiWrap.appendChild(d);
+  });
+
+  // table company
+  const tb = $("companyTable").querySelector("tbody");
+  tb.innerHTML="";
+  c.rows.forEach(r=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML = `
+      <td>${r.concept}</td>
+      <td class="num">${r.meta==null?"—":(r.meta.toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
+      <td class="num">${r.obtained==null?"—":r.obtained.toFixed(2)}</td>
+      <td class="num">${r.avance==null?"—":r.avance.toFixed(2)+"%"}</td>
+    `;
+    tb.appendChild(tr);
+  });
+
+  // employees
+  $("empCount").textContent = e.employees.length ? (e.employees.length + " empleados") : "";
+  const top = topEmployees(e.employees,5);
+  const topWrap = $("top5");
+  topWrap.innerHTML="";
+  top.forEach((x,i)=>{
+    const d=document.createElement("div");
+    d.className="msg";
+    d.innerHTML = `<b>${i+1})</b> ${x.name} <span class="pill" style="float:right">${fmtPct(x.calif)} · Agenda ${x.agenda??"—"}</span>`;
+    topWrap.appendChild(d);
+  });
+
+  const etb = $("empTable").querySelector("tbody");
+  etb.innerHTML="";
+  e.employees.forEach(x=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML = `
+      <td>${x.name}</td>
+      <td class="num">${x.agenda??"—"}</td>
+      <td class="num">${fmtPct(x.calif)}</td>
+    `;
+    etb.appendChild(tr);
+  });
+
+  return {c,e};
+}
+
+function saveWeek(){
+  const cfg=loadCfg();
+  if((cfg.mode||"admin")!=="admin"){
+    setMsg($("msgTop"), "Estás en modo Viewer. Cambia a Admin en Config para guardar.", "warn");
+    return;
+  }
+
+  const {company, year, month, week} = currentKeyFromInputs();
+
+  const start = $("weekStart").value || "";
+  const end = $("weekEnd").value || "";
+
+  const pc = $("pasteCompany").value;
+  const pe = $("pasteEmployees").value;
+
+  const parsedCompany = parseCompanyPaste(pc);
+  const parsedEmployees = parseEmployeesPaste(pe);
+
+  const data = loadData();
+  const bucket = getBucket(data, year, month);
+
+  bucket[makeKey(company, week)] = {
+    company, year, month, week,
+    start, end,
+    companyText: pc,
+    employeeText: pe,
+    parsedCompany,
+    parsedEmployees,
+    savedAt: new Date().toISOString()
+  };
+
+  saveData(data);
+  setMsg($("msgTop"), `Guardado ✅ ${company} | ${year}-${month} Semana ${week}`, "ok");
+}
+
+function loadWeek(){
+  const {company, year, month, week} = currentKeyFromInputs();
+  const data = loadData();
+  const bucket = (((data||{})[year]||{})[month]||{});
+  const rec = bucket[makeKey(company, week)];
+  if(!rec){
+    setMsg($("msgTop"), "No hay datos guardados para esa empresa/semana.", "warn");
+    return;
+  }
+  $("weekStart").value = rec.start || "";
+  $("weekEnd").value = rec.end || "";
+  $("pasteCompany").value = rec.companyText || "";
+  $("pasteEmployees").value = rec.employeeText || "";
+  setMsg($("msgTop"), `Cargado ✅ ${company} | ${year}-${month} Semana ${week}`, "ok");
+}
+
+function clearWeekInputs(){
+  const cfg=loadCfg();
+  if((cfg.mode||"admin")!=="admin") return;
+  $("weekStart").value="";
+  $("weekEnd").value="";
+  $("pasteCompany").value="";
+  $("pasteEmployees").value="";
+  $("previewArea").style.display="none";
+  setMsg($("msgTop"), "Limpio ✅", "ok");
+}
+
+function exportJSON(){
+  const data = loadData();
+  const blob = new Blob([JSON.stringify(data,null,2)], {type:"application/json"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download="herrera-reportes.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function importJSON(file){
+  const reader=new FileReader();
+  reader.onload=()=>{
+    try{
+      const obj=JSON.parse(reader.result);
+      saveData(obj);
+      setMsg($("msgTop"), "Importado ✅ (recarga Resultados para ver cambios)", "ok");
+    }catch(e){
+      setMsg($("msgTop"), "Ese archivo no es JSON válido.", "bad");
+    }
+  };
+  reader.readAsText(file);
+}
+
+function clearAll(){
+  const cfg=loadCfg();
+  if((cfg.mode||"admin")!=="admin"){
+    setMsg($("msgTop"), "Modo Viewer no puede borrar.", "warn");
+    return;
+  }
+  if(!confirm("¿Seguro que quieres borrar TODO lo guardado en este navegador?")) return;
+  localStorage.removeItem(STORAGE_KEY);
+  setMsg($("msgTop"), "Borrado local ✅", "ok");
+}
+
+/** ==============================
+ *  Resultados tab builder
+ *  ============================== */
+function buildResults(){
+  const year = String($("resYear").value||"");
+  const month = String($("resMonth").value||"");
+  const company = $("resCompany").value;
+
+  const data = loadData();
+  const bucket = (((data||{})[year]||{})[month]||{});
+
+  // 1) Empresa por semanas
+  const weeksTbody = $("resWeeksTable").querySelector("tbody");
+  weeksTbody.innerHTML="";
+  let kpis=[];
+  let hasAny=false;
+
+  for(let w=1; w<=5; w++){
+    const rec = bucket[makeKey(company, String(w))];
+    if(!rec) continue;
+    hasAny=true;
+    const kpi = rec.parsedCompany?.totals?.kpi ?? null;
+    kpis.push(kpi);
+    const tr=document.createElement("tr");
+    tr.innerHTML = `
+      <td>Semana ${w}</td>
+      <td class="mono">${(rec.start||"—")} → ${(rec.end||"—")}</td>
+      <td class="num">${fmtPct(kpi)}</td>
+      <td class="num">${rec.parsedCompany?.rows?.length ?? 0}</td>
+    `;
+    weeksTbody.appendChild(tr);
+  }
+
+  const avgKpi = kpis.filter(x=>x!=null).reduce((a,b)=>a+b,0) / (kpis.filter(x=>x!=null).length || 1);
+  $("resCompanyKpi").textContent = hasAny ? ("Promedio mes: " + fmtPct(avgKpi)) : "";
+
+  // 2) Ranking empleados por empresa (promedio por mes)
+  // juntamos calif por empleado a través de semanas guardadas
+  const empMap = new Map(); // name -> {sum, count}
+  for(let w=1; w<=5; w++){
+    const rec = bucket[makeKey(company, String(w))];
+    if(!rec) continue;
+    const emps = rec.parsedEmployees?.employees || [];
+    emps.forEach(e=>{
+      if(e.calif==null) return;
+      const key = e.name;
+      if(!empMap.has(key)) empMap.set(key, {sum:0,count:0});
+      const o = empMap.get(key);
+      o.sum += e.calif; o.count += 1;
+    });
+  }
+  const empRank = [...empMap.entries()].map(([name, o])=>({name, avg:o.sum/o.count, weeks:o.count}))
+    .sort((a,b)=>b.avg-a.avg);
+
+  const empTbody = $("resEmpRank").querySelector("tbody");
+  empTbody.innerHTML="";
+  empRank.forEach((r,i)=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML = `<td>${i+1}</td><td>${r.name}</td><td class="num">${fmtPct(r.avg)}</td><td class="num">${r.weeks}</td>`;
+    empTbody.appendChild(tr);
+  });
+  $("resEmpCount").textContent = empRank.length ? (empRank.length + " empleados") : "";
+
+  // 3) Comparativo semanal (todas las empresas)
+  const cmpBody = $("cmpWeekly").querySelector("tbody");
+  cmpBody.innerHTML="";
+  for(let w=1; w<=5; w++){
+    const rows=[];
+    for(const c of COMPANIES){
+      const rec = bucket[makeKey(c, String(w))];
+      if(!rec) continue;
+      rows.push({week:w, company:c, kpi: rec.parsedCompany?.totals?.kpi ?? null});
+    }
+    // orden por KPI desc
+    rows.sort((a,b)=>(b.kpi??-1)-(a.kpi??-1));
+    rows.forEach(r=>{
+      const tr=document.createElement("tr");
+      tr.innerHTML = `<td>Semana ${r.week}</td><td>${r.company}</td><td class="num">${fmtPct(r.kpi)}</td>`;
+      cmpBody.appendChild(tr);
+    });
+  }
+
+  // 4) Ranking general (empleados de todas las empresas)
+  const globalMap = new Map(); // key = name||company => {sum,count}
+  for(const c of COMPANIES){
+    for(let w=1; w<=5; w++){
+      const rec = bucket[makeKey(c, String(w))];
+      if(!rec) continue;
+      const emps = rec.parsedEmployees?.employees || [];
+      emps.forEach(e=>{
+        if(e.calif==null) return;
+        const key = e.name + "||" + c;
+        if(!globalMap.has(key)) globalMap.set(key, {name:e.name, company:c, sum:0, count:0});
+        const o = globalMap.get(key);
+        o.sum += e.calif; o.count += 1;
+      });
+    }
+  }
+  const globalRank = [...globalMap.values()].map(o=>({name:o.name, company:o.company, avg:o.sum/o.count, weeks:o.count}))
+    .sort((a,b)=>b.avg-a.avg);
+
+  const gBody = $("globalRank").querySelector("tbody");
+  gBody.innerHTML="";
+  globalRank.forEach((r,i)=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML = `<td>${i+1}</td><td>${r.name}</td><td>${r.company}</td><td class="num">${fmtPct(r.avg)}</td><td class="num">${r.weeks}</td>`;
+    gBody.appendChild(tr);
+  });
+
+  // 5) Mejor vendedor por empresa
+  const bestBody = $("bestByCompany").querySelector("tbody");
+  bestBody.innerHTML="";
+  for(const c of COMPANIES){
+    const map = new Map(); // name -> {sum,count}
+    for(let w=1; w<=5; w++){
+      const rec = bucket[makeKey(c, String(w))];
+      if(!rec) continue;
+      const emps = rec.parsedEmployees?.employees || [];
+      emps.forEach(e=>{
+        if(e.calif==null) return;
+        if(!map.has(e.name)) map.set(e.name, {sum:0,count:0});
+        const o = map.get(e.name);
+        o.sum += e.calif; o.count += 1;
+      });
+    }
+    const arr = [...map.entries()].map(([name,o])=>({name, avg:o.sum/o.count, weeks:o.count}))
+      .sort((a,b)=>b.avg-a.avg);
+
+    if(arr.length===0){
+      const tr=document.createElement("tr");
+      tr.innerHTML = `<td>${c}</td><td>—</td><td class="num">—</td><td class="num">0</td>`;
+      bestBody.appendChild(tr);
+    }else{
+      const best = arr[0];
+      const tr=document.createElement("tr");
+      tr.innerHTML = `<td>${c}</td><td>${best.name}</td><td class="num">${fmtPct(best.avg)}</td><td class="num">${best.weeks}</td>`;
+      bestBody.appendChild(tr);
+    }
+  }
+
+  // msg
+  if(!hasAny){
+    setMsg($("resMsg"), "No hay datos guardados para esa empresa/mes. Ve a Datos y guarda semanas.", "warn");
+    $("resMsg").style.display="block";
+  } else {
+    $("resMsg").style.display="none";
+  }
+}
+
+/** ==============================
+ *  Tabs
+ *  ============================== */
+function showTab(name){
+  ["datos","resultados","config"].forEach(t=>{
+    $("tab-"+t).style.display = (t===name) ? "grid" : "none";
+  });
+  document.querySelectorAll(".tab").forEach(b=>{
+    b.classList.toggle("active", b.dataset.tab===name);
+  });
+}
+
+/** ==============================
+ *  Init
+ *  ============================== */
+(function init(){
+  // fill selects
+  fillCompanies($("companySelect"));
+  fillCompanies($("resCompany"));
+
+  // tabs
+  document.querySelectorAll(".tab").forEach(b=>{
+    b.addEventListener("click", ()=>showTab(b.dataset.tab));
+  });
+
+  // buttons
+  $("btnPreview").addEventListener("click", ()=>preview());
+  $("btnSave").addEventListener("click", ()=>{ preview(); saveWeek(); });
+  $("btnLoad").addEventListener("click", ()=>loadWeek());
+  $("btnClearWeek").addEventListener("click", ()=>clearWeekInputs());
+  $("btnBuild").addEventListener("click", ()=>buildResults());
+
+  $("btnExport").addEventListener("click", ()=>exportJSON());
+  $("btnImport").addEventListener("click", ()=> $("importFile").click());
+  $("importFile").addEventListener("change", (e)=>{
+    if(e.target.files && e.target.files[0]) importJSON(e.target.files[0]);
+    e.target.value="";
+  });
+  $("btnClearAll").addEventListener("click", ()=>clearAll());
+
+  // config
+  applyMode();
+  $("btnSaveConfig").addEventListener("click", ()=>{
+    const current = loadCfg();
+    const nextMode = $("modeSelect").value;
+    const pin = $("modePin").value || "";
+
+    // si va a admin y hay pin guardado, pedirlo
+    if(nextMode==="admin" && current.pin){
+      const ask = prompt("PIN para entrar a Admin:");
+      if(ask !== current.pin){
+        setMsg($("cfgMsg"), "PIN incorrecto.", "bad");
+        $("cfgMsg").style.display="block";
+        applyMode();
+        return;
+      }
+    }
+
+    saveCfg({mode: nextMode, pin});
+    applyMode();
+    setMsg($("cfgMsg"), "Config guardada ✅", "ok");
+    $("cfgMsg").style.display="block";
+    setTimeout(()=> $("cfgMsg").style.display="none", 2000);
+  });
+
+  // defaults: set config mode pill
+  applyMode();
+})();
+</script>
 </body>
 </html>
+
