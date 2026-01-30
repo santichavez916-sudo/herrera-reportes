@@ -275,6 +275,16 @@
         </details>
       </div>
 
+      <!-- ✅ NUEVO: Desglose del mes (matriz) para la empresa seleccionada -->
+      <div class="card" style="padding:14px;margin-top:12px">
+        <details id="companyMatrixDetails">
+          <summary style="cursor:pointer;font-weight:800">Desglose del mes (matriz)</summary>
+          <div style="padding:10px 0" id="companyMatrixBox">
+            <span class="small">Presiona “Actualizar resultados”.</span>
+          </div>
+        </details>
+      </div>
+
       <div class="grid2" style="margin-top:12px">
         <div class="card" style="padding:14px">
           <div class="sectionTitle">
@@ -588,6 +598,118 @@ function topEmployees(employees, n=5){
   return [...employees].filter(e=>e.calif!=null).sort((a,b)=>(b.calif||-1)-(a.calif||-1)).slice(0,n);
 }
 
+/** ✅ NUEVO: Matriz tipo Excel (semanas + mes) para una empresa */
+function buildWeeklyMatrixHTML(bucket, companyName){
+  const conceptsSet = new Set();
+  const byWeek = {};
+  const kpiByWeek = {};
+
+  for(let w=1; w<=5; w++){
+    const rec = bucket[makeKey(companyName, String(w))];
+    const rows = Array.isArray(rec?.parsedCompany?.rows) ? rec.parsedCompany.rows : [];
+    byWeek[w] = rows;
+    rows.forEach(r => { if(r?.concept) conceptsSet.add(r.concept); });
+
+    const kpi = rec?.parsedCompany?.totals?.kpi;
+    kpiByWeek[w] = (kpi!=null && isFinite(kpi)) ? kpi : null;
+  }
+
+  const concepts = [...conceptsSet];
+  if(concepts.length===0){
+    return `<span class="small">Sin datos para construir desglose.</span>`;
+  }
+
+  function findRow(rows, concept){
+    return rows.find(r => (r?.concept||"").toLowerCase() === concept.toLowerCase()) || null;
+  }
+  function pct(obt, meta){
+    if(meta==null || !isFinite(meta) || meta<=0 || obt==null || !isFinite(obt)) return null;
+    return (obt/meta)*100;
+  }
+  function fmtNum(x){
+    if(x==null || !isFinite(x)) return "—";
+    return (Math.abs(x) >= 10) ? x.toFixed(0) : x.toFixed(2);
+  }
+  function fmtAv(x){
+    if(x==null || !isFinite(x)) return "—";
+    return x.toFixed(1) + "%";
+  }
+
+  const totalsByConcept = {};
+  concepts.forEach(c=>{
+    totalsByConcept[c] = {metaSum:0, obtSum:0};
+    for(let w=1; w<=5; w++){
+      const r = findRow(byWeek[w], c);
+      totalsByConcept[c].metaSum += (r?.meta||0);
+      totalsByConcept[c].obtSum  += (r?.obtained||0);
+    }
+  });
+
+  let html = `
+  <div style="max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:12px">
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr>
+          <th>Concepto</th>
+          ${[1,2,3,4,5].map(w=>`
+            <th class="right">Semana ${w}<br><span class="small">Meta</span></th>
+            <th class="right">Semana ${w}<br><span class="small">Obt</span></th>
+            <th class="right">Semana ${w}<br><span class="small">Av</span></th>
+          `).join("")}
+          <th class="right">Mes<br><span class="small">Meta</span></th>
+          <th class="right">Mes<br><span class="small">Obt</span></th>
+          <th class="right">Mes<br><span class="small">Av</span></th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+
+  concepts.forEach(concept=>{
+    html += `<tr><td>${concept}</td>`;
+
+    for(let w=1; w<=5; w++){
+      const r = findRow(byWeek[w], concept);
+      const meta = r?.meta ?? null;
+      const obt  = r?.obtained ?? null;
+      const av   = (r?.avance!=null && isFinite(r.avance)) ? r.avance : pct(obt, meta);
+
+      html += `
+        <td class="num">${fmtNum(meta)}</td>
+        <td class="num">${fmtNum(obt)}</td>
+        <td class="num">${fmtAv(av)}</td>
+      `;
+    }
+
+    const metaM = totalsByConcept[concept].metaSum;
+    const obtM  = totalsByConcept[concept].obtSum;
+    const avM   = pct(obtM, metaM);
+
+    html += `
+      <td class="num">${fmtNum(metaM)}</td>
+      <td class="num">${fmtNum(obtM)}</td>
+      <td class="num">${fmtAv(avM)}</td>
+    </tr>`;
+  });
+
+  const validKpis = [1,2,3,4,5].map(w=>kpiByWeek[w]).filter(x=>x!=null);
+  const avgKpi = validKpis.length ? (validKpis.reduce((a,b)=>a+b,0)/validKpis.length) : null;
+
+  html += `<tr>
+    <td style="font-weight:900">Avance General</td>
+    ${[1,2,3,4,5].map(w=>`
+      <td class="num">—</td>
+      <td class="num">—</td>
+      <td class="num" style="font-weight:900">${fmtAv(kpiByWeek[w])}</td>
+    `).join("")}
+    <td class="num">—</td>
+    <td class="num">—</td>
+    <td class="num" style="font-weight:900">${fmtAv(avgKpi)}</td>
+  </tr>`;
+
+  html += `</tbody></table></div>`;
+  return html;
+}
+
 /** ==============================
  *  UI helpers
  *  ============================== */
@@ -863,46 +985,24 @@ function buildResults(){
     return {rows, weeksUsed, kpiAvg};
   }
 
-  // 0) Comparativo mensual
+  // 0) Comparativo mensual (con desglose en matriz)
   const monthlyTbody = $("cmpMonthly").querySelector("tbody");
   monthlyTbody.innerHTML="";
 
   const monthlyRows = COMPANIES.map(c=>{
     const agg = aggregateMonthlyConcepts(c);
-    return {company:c, kpi:agg.kpiAvg, weeks:agg.weeksUsed, concepts:agg.rows};
+    return {company:c, kpi:agg.kpiAvg, weeks:agg.weeksUsed};
   }).sort((a,b)=>(b.kpi??-1)-(a.kpi??-1));
 
   monthlyRows.forEach(r=>{
-    const concepts = asArray(r.concepts);
-    const desgloseHTML = concepts.length ? `
+    const desgloseHTML = `
       <details>
         <summary style="cursor:pointer;font-weight:800">Desglose</summary>
         <div style="padding:10px 0">
-          <div style="max-height:240px;overflow:auto;border:1px solid var(--border);border-radius:12px">
-            <table style="width:100%;border-collapse:collapse">
-              <thead>
-                <tr>
-                  <th>Concepto</th>
-                  <th class="right">Meta (mes)</th>
-                  <th class="right">Obtenido (mes)</th>
-                  <th class="right">Avance%</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${concepts.map(x=>`
-                  <tr>
-                    <td>${x.concept}</td>
-                    <td class="num">${x.meta==null?"—":(x.meta.toFixed(2)+(x.metaNote?(" "+x.metaNote):""))}</td>
-                    <td class="num">${x.obtained==null?"—":x.obtained.toFixed(2)}</td>
-                    <td class="num">${x.avance==null?"—":x.avance.toFixed(2)+"%"}</td>
-                  </tr>
-                `).join("")}
-              </tbody>
-            </table>
-          </div>
+          ${buildWeeklyMatrixHTML(bucket, r.company)}
         </div>
       </details>
-    ` : `<span class="small">Sin datos del mes</span>`;
+    `;
 
     const tr=document.createElement("tr");
     tr.innerHTML = `
@@ -913,6 +1013,12 @@ function buildResults(){
     `;
     monthlyTbody.appendChild(tr);
   });
+
+  // ✅ Matriz del mes para la empresa seleccionada
+  const box = $("companyMatrixBox");
+  if(box){
+    box.innerHTML = buildWeeklyMatrixHTML(bucket, company);
+  }
 
   // 1) Empresa por semanas
   const weeksTbody = $("resWeeksTable").querySelector("tbody");
@@ -1013,7 +1119,7 @@ function buildResults(){
   });
   $("resEmpCount").textContent = empRank.length ? (empRank.length + " empleados") : "";
 
-  // 3) Comparativo semanal con filtro
+  // 3) Comparativo semanal con filtro (ordenado mayor a menor)
   const weekFilter = $("cmpWeekFilter") ? $("cmpWeekFilter").value : "all";
   const cmpBody = $("cmpWeekly").querySelector("tbody");
   cmpBody.innerHTML="";
@@ -1213,4 +1319,5 @@ function showTab(name){
 </script>
 </body>
 </html>
+
 
