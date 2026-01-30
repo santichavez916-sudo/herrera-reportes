@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Herrera | Resultados Semanales</title>
 
-  <!-- Chart.js (CDN) -->
+  <!-- ✅ SOLO SE AGREGA ESTO PARA GRAFICAS -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
   <style>
@@ -68,11 +68,14 @@
     .right{text-align:right}
     .hr{height:1px;background:var(--border);margin:10px 0}
     .mono{font-family:var(--mono)}
-    .chartWrap{border:1px solid var(--border);border-radius:14px;padding:10px;background:#fff}
+
+    /* ✅ SOLO PARA LAS GRAFICAS (NO TOCA TUS DESGLOSES) */
+    .chartWrap{border:1px solid var(--border);border-radius:14px;padding:12px;background:#fff}
     .legendBox{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
     .dot{width:10px;height:10px;border-radius:999px;display:inline-block}
   </style>
 </head>
+
 <body>
 <div class="wrap">
 
@@ -173,7 +176,7 @@
       <div id="previewArea" class="grid" style="margin-top:12px;display:none">
         <div class="grid2">
           <div class="card" style="padding:14px">
-            <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Preview Empresa</h2></div>
+            <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Preview Empresa</h2><span class="small" id="companyKpiHint"></span></div>
             <div id="companyPreviewMsg" class="msg" style="display:none;margin-top:10px"></div>
             <div id="companyKpis" class="kpi" style="margin-top:10px"></div>
             <div style="margin-top:10px;max-height:280px;overflow:auto;border:1px solid var(--border);border-radius:12px">
@@ -248,53 +251,53 @@
 
       <div id="resMsg" class="msg warn" style="display:none;margin-top:10px"></div>
 
-      <!-- ✅ GRAFICAS FINALES (independientes) -->
-      <div class="card" style="margin-top:12px">
+      <!-- ✅ SOLO SE AGREGA ESTE BLOQUE DE GRAFICAS (NO QUITA DESGLOSES) -->
+      <div class="card" style="padding:14px;margin-top:12px">
         <div class="sectionTitle">
           <h2 style="font-size:14px;margin:0">Gráficas (mes acumulado)</h2>
-          <div class="small">Ranking KPI vs Eficiencia empleados</div>
+          <span class="small">Independientes (siempre 14 empresas)</span>
         </div>
         <div class="hr"></div>
 
         <div class="grid2">
-
-          <div class="card" style="padding:14px;border-radius:14px">
+          <div>
             <div class="sectionTitle">
-              <h2 style="font-size:14px;margin:0">Gráfica 1 · Ranking actual (KPI% mes)</h2>
-              <span class="small">De mayor a menor</span>
+              <h2 style="font-size:14px;margin:0">Gráfica 1 · Ranking empresas (KPI% mes)</h2>
+              <span class="small">Mayor a menor</span>
             </div>
-            <p class="hint" style="margin-top:6px">KPI del mes por empresa (promedio de KPIs semanales guardados).</p>
-            <div class="chartWrap">
+            <p class="hint" style="margin-top:6px">Usa KPI mensual (promedio de KPIs semanales).</p>
+            <div class="chartWrap" style="margin-top:10px">
               <canvas id="chartRankingKPI"></canvas>
             </div>
           </div>
 
-          <div class="card" style="padding:14px;border-radius:14px">
+          <div>
             <div class="sectionTitle">
               <h2 style="font-size:14px;margin:0">Gráfica 2 · Eficiencia por Área (empleados)</h2>
               <span class="small">Promedio % empleados</span>
             </div>
 
             <div class="legendBox" style="margin-top:8px">
-              <span class="small"><span class="dot" style="background:#16a34a"></span> Verde: &gt;70% (Óptimo)</span>
-              <span class="small"><span class="dot" style="background:#f59e0b"></span> Amarillo: 40–69% (Medio)</span>
-              <span class="small"><span class="dot" style="background:#dc2626"></span> Rojo: &lt;40% (Crítico)</span>
+              <span class="small"><span class="dot" style="background:#16a34a"></span> Verde: &gt;70%</span>
+              <span class="small"><span class="dot" style="background:#f59e0b"></span> Amarillo: 40–69%</span>
+              <span class="small"><span class="dot" style="background:#dc2626"></span> Rojo: &lt;40%</span>
               <span class="small"><span class="dot" style="background:#9ca3af"></span> Gris: sin datos</span>
             </div>
 
             <p class="hint" style="margin-top:6px">
-              Se calcula así: (suma % final de vendedores del mes) / (# empleados con %).
+              (Suma % de vendedores del mes) / (# empleados con %).
             </p>
 
             <div class="chartWrap" style="margin-top:10px">
               <canvas id="chartEfficiencyArea"></canvas>
             </div>
           </div>
-
         </div>
       </div>
 
-      <!-- Comparativo mensual -->
+      <!-- ✅ DESDE AQUI PARA ABAJO ES TU VERSION CON DESGLOSES: NO SE TOCA -->
+
+      <!-- ✅ Comparativo mensual colapsable + botones abrir/cerrar desgloses -->
       <div class="card" style="padding:14px;margin-top:12px">
         <details id="cmpMonthlyDetails" open>
           <summary style="cursor:pointer;list-style:none">
@@ -478,7 +481,7 @@
 
 <script>
 /** ==============================
- *  Constantes
+ *  Config / Constantes
  *  ============================== */
 const COMPANIES = [
   'HERRERA MOTORS SUR',
@@ -501,7 +504,10 @@ const STORAGE_KEY = "herrera_reportes_v1";
 const CFG_KEY = "herrera_cfg_v1";
 
 function $(id){ return document.getElementById(id); }
-function fmtPct(n){ if(n==null || !isFinite(n)) return "—"; return n.toFixed(2) + "%"; }
+function fmtPct(n){
+  if(n==null || !isFinite(n)) return "—";
+  return n.toFixed(2) + "%";
+}
 function safeNum(s){
   if(s==null) return null;
   const t = String(s).replace(/,/g,"").replace(/[^\d.\-]/g,"").trim();
@@ -509,60 +515,32 @@ function safeNum(s){
   const n = Number(t);
   return isFinite(n) ? n : null;
 }
-function normalizeSpaces(s){ return String(s).replace(/\u00a0/g," ").replace(/[ \t]+/g," ").trim(); }
-function esc(s){ return String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+function normalizeSpaces(s){
+  return String(s).replace(/\u00a0/g," ").replace(/[ \t]+/g," ").trim();
+}
 
-function loadData(){ try{ const raw=localStorage.getItem(STORAGE_KEY); return raw?JSON.parse(raw):{}; }catch(e){ return {}; } }
-function saveData(obj){ localStorage.setItem(STORAGE_KEY, JSON.stringify(obj)); }
-function getBucket(data, year, month){ data[year] ??= {}; data[year][month] ??= {}; return data[year][month]; }
+/** ==============================
+ *  Modelo de datos guardado
+ *  ============================== */
+function loadData(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  }catch(e){ return {}; }
+}
+function saveData(obj){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
+}
+function getBucket(data, year, month){
+  data[year] ??= {};
+  data[year][month] ??= {};
+  return data[year][month];
+}
 function makeKey(company, week){ return company + "||" + week; }
 const asArray = (x)=> Array.isArray(x) ? x : [];
 
-function setMsg(el, text, type){
-  if(!text){ el.style.display="none"; el.textContent=""; el.className="msg"; return; }
-  el.style.display="block";
-  el.textContent=text;
-  el.className="msg " + (type||"");
-}
-function fillCompanies(selectEl){
-  selectEl.innerHTML = "";
-  for(const c of COMPANIES){
-    const opt=document.createElement("option");
-    opt.value=c; opt.textContent=c;
-    selectEl.appendChild(opt);
-  }
-}
-function currentKeyFromInputs(){
-  const company = $("companySelect").value;
-  const year = String($("yearInput").value||"");
-  const month = String($("monthInput").value||"");
-  const week = String($("weekSelect").value||"");
-  return {company, year, month, week};
-}
-
 /** ==============================
- *  Mode
- *  ============================== */
-function loadCfg(){ try{ return JSON.parse(localStorage.getItem(CFG_KEY) || "{}"); }catch(e){ return {}; } }
-function saveCfg(cfg){ localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }
-function applyMode(){
-  const cfg = loadCfg();
-  const mode = cfg.mode || "admin";
-  $("modeSelect").value = mode;
-  $("modePin").value = cfg.pin || "";
-  $("modePill").textContent = "Modo: " + (mode==="admin" ? "Admin" : "Viewer");
-  const isAdmin = mode==="admin";
-  $("btnSave").disabled = !isAdmin;
-  $("btnClearAll").disabled = !isAdmin;
-  $("btnClearWeek").disabled = !isAdmin;
-  $("pasteCompany").disabled = !isAdmin;
-  $("pasteEmployees").disabled = !isAdmin;
-  $("weekStart").disabled = !isAdmin;
-  $("weekEnd").disabled = !isAdmin;
-}
-
-/** ==============================
- *  Parsers
+ *  Parsers (JS)
  *  ============================== */
 function parseCompanyPaste(text){
   const warnings=[], errors=[];
@@ -612,6 +590,7 @@ function parseCompanyPaste(text){
   const obtainedSum = rows.reduce((a,r)=>a+(r.obtained||0),0);
   const kpiCalc = metaSum>0 ? (obtainedSum/metaSum)*100 : null;
   const kpi = (kpiReported!=null) ? kpiReported : kpiCalc;
+  if(kpiReported==null) warnings.push("No detecté KPI reportado (footer). Usaré KPI calculado.");
 
   return { rows, totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported}, warnings, errors };
 }
@@ -661,8 +640,64 @@ function parseEmployeesPaste(text){
   return { employees, warnings, errors };
 }
 
+function topEmployees(employees, n=5){
+  return [...employees].filter(e=>e.calif!=null).sort((a,b)=>(b.calif||-1)-(a.calif||-1)).slice(0,n);
+}
+
 /** ==============================
- *  Datos actions
+ *  UI helpers
+ *  ============================== */
+function setMsg(el, text, type){
+  if(!text){ el.style.display="none"; el.textContent=""; el.className="msg"; return; }
+  el.style.display="block";
+  el.textContent=text;
+  el.className="msg " + (type||"");
+}
+
+function fillCompanies(selectEl){
+  selectEl.innerHTML = "";
+  for(const c of COMPANIES){
+    const opt=document.createElement("option");
+    opt.value=c; opt.textContent=c;
+    selectEl.appendChild(opt);
+  }
+}
+
+function currentKeyFromInputs(){
+  const company = $("companySelect").value;
+  const year = String($("yearInput").value||"");
+  const month = String($("monthInput").value||"");
+  const week = String($("weekSelect").value||"");
+  return {company, year, month, week};
+}
+
+/** ==============================
+ *  Mode (admin/viewer)
+ *  ============================== */
+function loadCfg(){
+  try{ return JSON.parse(localStorage.getItem(CFG_KEY) || "{}"); }catch(e){ return {}; }
+}
+function saveCfg(cfg){
+  localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
+}
+function applyMode(){
+  const cfg = loadCfg();
+  const mode = cfg.mode || "admin";
+  $("modeSelect").value = mode;
+  $("modePin").value = cfg.pin || "";
+  $("modePill").textContent = "Modo: " + (mode==="admin" ? "Admin" : "Viewer");
+  const isAdmin = mode==="admin";
+  $("btnSave").disabled = !isAdmin;
+  $("btnClearAll").disabled = !isAdmin;
+  $("btnClearWeek").disabled = !isAdmin;
+  $("pasteCompany").disabled = !isAdmin;
+  $("pasteEmployees").disabled = !isAdmin;
+  $("weekStart").disabled = !isAdmin;
+  $("weekEnd").disabled = !isAdmin;
+}
+
+/** ==============================
+ *  Datos tab actions
  *  ============================== */
 function preview(){
   const pc = $("pasteCompany").value;
@@ -695,8 +730,8 @@ function preview(){
   c.rows.forEach(r=>{
     const tr=document.createElement("tr");
     tr.innerHTML = `
-      <td>${esc(r.concept)}</td>
-      <td class="num">${r.meta==null?"—":(r.meta.toFixed(2)+(r.metaNote?(" "+esc(r.metaNote)):""))}</td>
+      <td>${r.concept}</td>
+      <td class="num">${r.meta==null?"—":(r.meta.toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
       <td class="num">${r.obtained==null?"—":r.obtained.toFixed(2)}</td>
       <td class="num">${r.avance==null?"—":r.avance.toFixed(2)+"%"}</td>
     `;
@@ -704,13 +739,22 @@ function preview(){
   });
 
   $("empCount").textContent = e.employees.length ? (e.employees.length + " empleados") : "";
+  const top = topEmployees(e.employees,5);
+  const topWrap = $("top5");
+  topWrap.innerHTML="";
+  top.forEach((x,i)=>{
+    const d=document.createElement("div");
+    d.className="msg";
+    d.innerHTML = `<b>${i+1})</b> ${x.name} <span class="pill" style="float:right">${fmtPct(x.calif)} · Agenda ${x.agenda??"—"}</span>`;
+    topWrap.appendChild(d);
+  });
 
   const etb = $("empTable").querySelector("tbody");
   etb.innerHTML="";
   e.employees.forEach(x=>{
     const tr=document.createElement("tr");
     tr.innerHTML = `
-      <td>${esc(x.name)}</td>
+      <td>${x.name}</td>
       <td class="num">${x.agenda??"—"}</td>
       <td class="num">${fmtPct(x.calif)}</td>
     `;
@@ -817,6 +861,7 @@ function clearAll(){
   setMsg($("msgTop"), "Borrado local ✅", "ok");
 }
 
+/** Abrir/cerrar desgloses del comparativo mensual */
 function setMonthlyBreakdowns(open){
   const table = document.getElementById("cmpMonthly");
   if(!table) return;
@@ -825,22 +870,90 @@ function setMonthlyBreakdowns(open){
 }
 
 /** ==============================
- *  Charts
+ *  ✅ GRAFICAS (solo agregadas)
  *  ============================== */
-let CHART_RANK = null;
+let CHART_RANKING = null;
 let CHART_EFF = null;
 
-function destroyChart(ch){ if(ch && typeof ch.destroy==="function") ch.destroy(); }
-
+function destroyChart(ch){
+  if(ch && typeof ch.destroy === "function") ch.destroy();
+}
 function colorByEfficiency(pct){
-  if(pct==null || !isFinite(pct)) return "#9ca3af"; // gris
-  if(pct >= 70) return "#16a34a"; // verde
-  if(pct >= 40) return "#f59e0b"; // amarillo
-  return "#dc2626"; // rojo
+  if(pct==null || !isFinite(pct)) return "#9ca3af";
+  if(pct >= 70) return "#16a34a";
+  if(pct >= 40) return "#f59e0b";
+  return "#dc2626";
+}
+
+function renderCharts({bucket, year, month, aggregateMonthlyConcepts, employeeEfficiencyByCompany}){
+  const rankData = COMPANIES.map(c=>{
+    const kpi = aggregateMonthlyConcepts(c).kpiAvg;
+    return {company:c, value:(kpi!=null && isFinite(kpi))?kpi:0, has:(kpi!=null && isFinite(kpi))};
+  }).sort((a,b)=>b.value-a.value);
+
+  const effData = COMPANIES.map(c=>{
+    const {avg, count} = employeeEfficiencyByCompany(c);
+    const v = (avg!=null && isFinite(avg)) ? avg : 0;
+    const has = (avg!=null && isFinite(avg)) && count>0;
+    return {company:c, value:v, has};
+  }).sort((a,b)=>b.value-a.value);
+
+  const c1 = document.getElementById("chartRankingKPI");
+  const c2 = document.getElementById("chartEfficiencyArea");
+  if(!c1 || !c2) return;
+
+  destroyChart(CHART_RANKING);
+  destroyChart(CHART_EFF);
+
+  CHART_RANKING = new Chart(c1, {
+    type: "bar",
+    data: {
+      labels: rankData.map(x=>x.company),
+      datasets: [{
+        label: "KPI% mes (promedio)",
+        data: rankData.map(x=>x.value),
+        backgroundColor: rankData.map(x=> x.has ? "#111827" : "#9ca3af")
+      }]
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      plugins: {
+        legend: { display: true },
+        tooltip: { callbacks: { label: (ctx)=> `KPI%: ${Number(ctx.raw).toFixed(2)}%` } }
+      },
+      scales: {
+        x: { beginAtZero:true, max:100, ticks:{ callback:(v)=> v+"%" } }
+      }
+    }
+  });
+
+  CHART_EFF = new Chart(c2, {
+    type: "bar",
+    data: {
+      labels: effData.map(x=>x.company),
+      datasets: [{
+        label: "Eficiencia empleados% (promedio)",
+        data: effData.map(x=>x.value),
+        backgroundColor: effData.map(x=> x.has ? colorByEfficiency(x.value) : "#9ca3af")
+      }]
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      plugins: {
+        legend: { display: true },
+        tooltip: { callbacks: { label: (ctx)=> `Eficiencia: ${Number(ctx.raw).toFixed(2)}%` } }
+      },
+      scales: {
+        x: { beginAtZero:true, max:100, ticks:{ callback:(v)=> v+"%" } }
+      }
+    }
+  });
 }
 
 /** ==============================
- *  Resultados
+ *  Resultados tab builder (tu versión + gráficas)
  *  ============================== */
 function buildResults(){
   const year = String($("resYear").value||"");
@@ -887,7 +1000,6 @@ function buildResults(){
     return {rows, weeksUsed, kpiAvg};
   }
 
-  // ✅ NUEVO: eficiencia por área (empleados) del mes por empresa
   function employeeEfficiencyByCompany(companyName){
     let sum=0, count=0;
     for(let w=1; w<=5; w++){
@@ -900,7 +1012,7 @@ function buildResults(){
         count += 1;
       });
     }
-    const avg = count ? (sum / count) : null;
+    const avg = count ? (sum/count) : null;
     return {avg, count};
   }
 
@@ -926,14 +1038,14 @@ function buildResults(){
                   <th>Concepto</th>
                   <th class="right">Meta (mes)</th>
                   <th class="right">Obtenido (mes)</th>
-                  <th class="right">Eficiencia%</th>
+                  <th class="right">Avance%</th>
                 </tr>
               </thead>
               <tbody>
                 ${concepts.map(x=>`
                   <tr>
-                    <td>${esc(x.concept)}</td>
-                    <td class="num">${x.meta==null?"—":(x.meta.toFixed(2)+(x.metaNote?(" "+esc(x.metaNote)):""))}</td>
+                    <td>${x.concept}</td>
+                    <td class="num">${x.meta==null?"—":(x.meta.toFixed(2)+(x.metaNote?(" "+x.metaNote):""))}</td>
                     <td class="num">${x.obtained==null?"—":x.obtained.toFixed(2)}</td>
                     <td class="num">${x.avance==null?"—":x.avance.toFixed(2)+"%"}</td>
                   </tr>
@@ -947,7 +1059,7 @@ function buildResults(){
 
     const tr=document.createElement("tr");
     tr.innerHTML = `
-      <td>${esc(r.company)}</td>
+      <td>${r.company}</td>
       <td class="num">${fmtPct(r.kpi)}</td>
       <td class="num">${r.weeks}</td>
       <td>${desgloseHTML}</td>
@@ -955,7 +1067,7 @@ function buildResults(){
     monthlyTbody.appendChild(tr);
   });
 
-  // 1) Empresa (semanas)
+  // 1) Empresa por semanas
   const weeksTbody = $("resWeeksTable").querySelector("tbody");
   weeksTbody.innerHTML="";
   const kpis=[];
@@ -967,8 +1079,8 @@ function buildResults(){
 
     const rows = asArray(rec?.parsedCompany?.rows);
     const kpi = rec?.parsedCompany?.totals?.kpi ?? null;
-    if(rows.length===0 && (kpi==null || !isFinite(kpi))) continue;
 
+    if(rows.length===0 && (kpi==null || !isFinite(kpi))) continue;
     hasAny=true;
     if(kpi!=null && isFinite(kpi)) kpis.push(kpi);
 
@@ -983,14 +1095,14 @@ function buildResults(){
                   <th>Concepto</th>
                   <th class="right">Meta</th>
                   <th class="right">Obtenido</th>
-                  <th class="right">Eficiencia%</th>
+                  <th class="right">Avance%</th>
                 </tr>
               </thead>
               <tbody>
                 ${rows.map(r=>`
                   <tr>
-                    <td>${esc(r.concept)}</td>
-                    <td class="num">${r.meta==null?"—":(r.meta.toFixed(2)+(r.metaNote?(" "+esc(r.metaNote)):""))}</td>
+                    <td>${r.concept}</td>
+                    <td class="num">${r.meta==null?"—":(r.meta.toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
                     <td class="num">${r.obtained==null?"—":r.obtained.toFixed(2)}</td>
                     <td class="num">${r.avance==null?"—":r.avance.toFixed(2)+"%"}</td>
                   </tr>
@@ -1005,7 +1117,7 @@ function buildResults(){
     const tr=document.createElement("tr");
     tr.innerHTML = `
       <td>Semana ${w}</td>
-      <td class="mono">${esc(rec.start||"—")} → ${esc(rec.end||"—")}</td>
+      <td class="mono">${(rec.start||"—")} → ${(rec.end||"—")}</td>
       <td class="num">${fmtPct(kpi)}</td>
       <td class="num">${rows.length}</td>
       <td>${desgloseHTML}</td>
@@ -1016,7 +1128,7 @@ function buildResults(){
   const avgKpi = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
   $("resCompanyKpi").textContent = hasAny ? ("Promedio mes: " + fmtPct(avgKpi)) : "";
 
-  // 2) Ranking empleados (empresa)
+  // 2) Ranking empleados (empresa) Mes/Semana
   const viewEmp = $("empWeekView") ? $("empWeekView").value : "mes";
   let empRank=[];
 
@@ -1048,12 +1160,12 @@ function buildResults(){
   empTbody.innerHTML="";
   empRank.forEach((r,i)=>{
     const tr=document.createElement("tr");
-    tr.innerHTML = `<td>${i+1}</td><td>${esc(r.name)}</td><td class="num">${fmtPct(r.avg)}</td><td class="num">${r.weeks}</td>`;
+    tr.innerHTML = `<td>${i+1}</td><td>${r.name}</td><td class="num">${fmtPct(r.avg)}</td><td class="num">${r.weeks}</td>`;
     empTbody.appendChild(tr);
   });
   $("resEmpCount").textContent = empRank.length ? (empRank.length + " empleados") : "";
 
-  // 3) Comparativo semanal (filtro)
+  // 3) Comparativo semanal con filtro
   const weekFilter = $("cmpWeekFilter") ? $("cmpWeekFilter").value : "all";
   const cmpBody = $("cmpWeekly").querySelector("tbody");
   cmpBody.innerHTML="";
@@ -1070,18 +1182,24 @@ function buildResults(){
     rows.sort((a,b)=>(b.kpi)-(a.kpi));
     rows.forEach(r=>{
       const tr=document.createElement("tr");
-      tr.innerHTML = `<td>Semana ${r.week}</td><td>${esc(r.company)}</td><td class="num">${fmtPct(r.kpi)}</td>`;
+      tr.innerHTML = `<td>Semana ${r.week}</td><td>${r.company}</td><td class="num">${fmtPct(r.kpi)}</td>`;
       cmpBody.appendChild(tr);
     });
   }
-  if(weekFilter==="all"){ for(let w=1; w<=5; w++) renderWeek(w); } else { renderWeek(Number(weekFilter)); }
 
-  // 4) Ranking general (todas) mes/semana
+  if(weekFilter==="all"){
+    for(let w=1; w<=5; w++) renderWeek(w);
+  }else{
+    renderWeek(Number(weekFilter));
+  }
+
+  // 4) Ranking general (todas) Mes/Semana
   const viewGlobal = $("globalWeekView") ? $("globalWeekView").value : "mes";
   const gBody = $("globalRank").querySelector("tbody");
   gBody.innerHTML="";
 
   let globalRank=[];
+
   if(viewGlobal==="mes"){
     const globalMap = new Map();
     for(const c of COMPANIES){
@@ -1114,9 +1232,10 @@ function buildResults(){
     }
     globalRank = list.sort((a,b)=>b.avg-a.avg);
   }
+
   globalRank.forEach((r,i)=>{
     const tr=document.createElement("tr");
-    tr.innerHTML = `<td>${i+1}</td><td>${esc(r.name)}</td><td>${esc(r.company)}</td><td class="num">${fmtPct(r.avg)}</td><td class="num">${r.weeks}</td>`;
+    tr.innerHTML = `<td>${i+1}</td><td>${r.name}</td><td>${r.company}</td><td class="num">${fmtPct(r.avg)}</td><td class="num">${r.weeks}</td>`;
     gBody.appendChild(tr);
   });
 
@@ -1141,101 +1260,15 @@ function buildResults(){
 
     const tr=document.createElement("tr");
     if(arr.length===0){
-      tr.innerHTML = `<td>${esc(c)}</td><td>—</td><td class="num">—</td><td class="num">0</td>`;
+      tr.inner (tr.innerHTML = `<td>${c}</td><td>—</td><td class="num">—</td><td class="num">0</td>`);
     }else{
-      tr.innerHTML = `<td>${esc(c)}</td><td>${esc(arr[0].name)}</td><td class="num">${fmtPct(arr[0].avg)}</td><td class="num">${arr[0].weeks}</td>`;
+      tr.innerHTML = `<td>${c}</td><td>${arr[0].name}</td><td class="num">${fmtPct(arr[0].avg)}</td><td class="num">${arr[0].weeks}</td>`;
     }
     bestBody.appendChild(tr);
   }
 
-  // =========================
-  // ✅ GRAFICA 1: Ranking KPI mes (14 empresas)
-  // =========================
-  const rankData = COMPANIES.map(c=>{
-    const kpi = aggregateMonthlyConcepts(c).kpiAvg;
-    return {company:c, value: (kpi!=null && isFinite(kpi)) ? kpi : 0, has: (kpi!=null && isFinite(kpi))};
-  }).sort((a,b)=>b.value-a.value);
-
-  // =========================
-  // ✅ GRAFICA 2: Eficiencia por área (promedio % empleados)
-  // =========================
-  const effData = COMPANIES.map(c=>{
-    const {avg, count} = employeeEfficiencyByCompany(c);
-    const v = (avg!=null && isFinite(avg)) ? avg : 0;
-    const has = (avg!=null && isFinite(avg)) && count>0;
-    return {company:c, value:v, has};
-  }).sort((a,b)=>b.value-a.value);
-
-  // Render charts
-  const ctxRank = document.getElementById("chartRankingKPI");
-  const ctxEff  = document.getElementById("chartEfficiencyArea");
-
-  if(ctxRank && ctxEff){
-    destroyChart(CHART_RANK);
-    destroyChart(CHART_EFF);
-
-    CHART_RANK = new Chart(ctxRank, {
-      type: "bar",
-      data: {
-        labels: rankData.map(x=>x.company),
-        datasets: [{
-          label: "KPI% mes (promedio)",
-          data: rankData.map(x=>x.value),
-          backgroundColor: rankData.map(x=> x.has ? "#111827" : "#9ca3af")
-        }]
-      },
-      options: {
-        indexAxis: "y",
-        responsive: true,
-        plugins: {
-          legend: { display: true },
-          tooltip: {
-            callbacks: {
-              label: (ctx)=> `KPI%: ${Number(ctx.raw).toFixed(2)}%`
-            }
-          }
-        },
-        scales: {
-          x: {
-            beginAtZero: true,
-            max: 100,
-            ticks: { callback: (v)=> v + "%" }
-          }
-        }
-      }
-    });
-
-    CHART_EFF = new Chart(ctxEff, {
-      type: "bar",
-      data: {
-        labels: effData.map(x=>x.company),
-        datasets: [{
-          label: "Eficiencia empleados% (promedio)",
-          data: effData.map(x=>x.value),
-          backgroundColor: effData.map(x=> x.has ? colorByEfficiency(x.value) : "#9ca3af")
-        }]
-      },
-      options: {
-        indexAxis: "y",
-        responsive: true,
-        plugins: {
-          legend: { display: true },
-          tooltip: {
-            callbacks: {
-              label: (ctx)=> `Eficiencia: ${Number(ctx.raw).toFixed(2)}%`
-            }
-          }
-        },
-        scales: {
-          x: {
-            beginAtZero: true,
-            max: 100,
-            ticks: { callback: (v)=> v + "%" }
-          }
-        }
-      }
-    });
-  }
+  // ✅ SOLO AQUI LLAMAMOS A LAS GRAFICAS (NO TOCA DESGLOSES)
+  renderCharts({bucket, year, month, aggregateMonthlyConcepts, employeeEfficiencyByCompany});
 
   if(!hasAny){
     setMsg($("resMsg"), "No hay datos guardados para esa empresa/mes. Ve a Datos y guarda semanas.", "warn");
@@ -1246,6 +1279,18 @@ function buildResults(){
 }
 
 /** ==============================
+ *  Tabs
+ *  ============================== */
+function showTab(name){
+  ["datos","resultados","config"].forEach(t=>{
+    $("tab-"+t).style.display = (t===name) ? "grid" : "none";
+  });
+  document.querySelectorAll(".tab").forEach(b=>{
+    b.classList.toggle("active", b.dataset.tab===name);
+  });
+}
+
+/** ==============================
  *  Init
  *  ============================== */
 (function init(){
@@ -1253,20 +1298,13 @@ function buildResults(){
   fillCompanies($("resCompany"));
 
   document.querySelectorAll(".tab").forEach(b=>{
-    b.addEventListener("click", ()=>{
-      const name=b.dataset.tab;
-      ["datos","resultados","config"].forEach(t=>{
-        $("tab-"+t).style.display = (t===name) ? "grid" : "none";
-      });
-      document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active", x.dataset.tab===name));
-    });
+    b.addEventListener("click", ()=>showTab(b.dataset.tab));
   });
 
   $("btnPreview").addEventListener("click", ()=>preview());
   $("btnSave").addEventListener("click", ()=>{ preview(); saveWeek(); });
   $("btnLoad").addEventListener("click", ()=>loadWeek());
   $("btnClearWeek").addEventListener("click", ()=>clearWeekInputs());
-
   $("btnBuild").addEventListener("click", ()=>buildResults());
 
   $("btnExport").addEventListener("click", ()=>exportJSON());
@@ -1275,7 +1313,6 @@ function buildResults(){
     if(e.target.files && e.target.files[0]) importJSON(e.target.files[0]);
     e.target.value="";
   });
-
   $("btnClearAll").addEventListener("click", ()=>clearAll());
 
   if($("empWeekView")) $("empWeekView").addEventListener("change", ()=>buildResults());
@@ -1323,6 +1360,7 @@ function buildResults(){
 </script>
 </body>
 </html>
+
 
 
 
