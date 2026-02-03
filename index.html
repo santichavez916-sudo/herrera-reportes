@@ -710,7 +710,7 @@ function saveCfg(cfg){
 }
 function applyMode(){
   const cfg = loadCfg();
-  const mode = cfg.mode || "admin";
+  const mode = cfg.mode || "viewer";
   $("modeSelect").value = mode;
   $("modePin").value = cfg.pin || "";
   $("modePill").textContent = "Modo: " + (mode==="admin" ? "Admin" : "Viewer");
