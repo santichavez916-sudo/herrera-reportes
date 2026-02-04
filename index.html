@@ -1527,32 +1527,10 @@ function showTab(name){
     $("cfgMsg").style.display="block";
     setTimeout(()=> $("cfgMsg").style.display="none", 2000);
   });
-// ✅ Admin por URL: ?admin=1
-function isAdminLink(){
-  const p = new URLSearchParams(window.location.search);
-  return p.get("admin") === "1";
-}
 
-function applyViewerLock(){
-  const admin = isAdminLink();
-
-  // Oculta/mostrar pestaña Config
-  const configTabBtn = document.querySelector('.tab[data-tab="config"]');
-  if(configTabBtn){
-    configTabBtn.style.display = admin ? "" : "none";
-  }
-
-  // Si NO es admin → forzar viewer
-  if(!admin){
-    saveCfg({ mode: "viewer", pin: loadCfg()?.pin || "" });
-    applyMode();
-
-    const tabConfig = document.getElementById("tab-config");
-    if(tabConfig) tabConfig.style.display = "none";
   }
 }
   applyMode();
-applyViewerLock();
 }
 })();
 </script>
