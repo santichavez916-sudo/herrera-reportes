@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!†DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
@@ -710,12 +710,7 @@ function saveCfg(cfg){
 }
 function applyMode(){
   const cfg = loadCfg();
-  const mode = cfg.mode || "viewer";
-  // ✅ Ocultar pestaña Config cuando es Viewer
-const configTabBtn = document.querySelector('.tab[data-tab="config"]');
-if (configTabBtn){
-  configTabBtn.style.display = (mode === "viewer") ? "none" : "inline-block";
-}
+  const mode = cfg.mode || "admin";
   $("modeSelect").value = mode;
   $("modePin").value = cfg.pin || "";
   $("modePill").textContent = "Modo: " + (mode==="admin" ? "Admin" : "Viewer");
@@ -1528,10 +1523,7 @@ function showTab(name){
     setTimeout(()=> $("cfgMsg").style.display="none", 2000);
   });
 
-  }
-}
   applyMode();
-}
 })();
 </script>
 </body>
