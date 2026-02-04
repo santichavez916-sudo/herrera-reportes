@@ -549,10 +549,99 @@ function makeKey(company, week){ return company + "||" + week; }
  *  Lee columnas reales:
  *  Concepto | Meta | Obtenido | Obtenido% | Meta% (peso) | Avance%
  *  ============================== */
-function parseCompanyPaste(text){
-  const warnings=[], errors=[];
-  const rawLines = String(text||"").split(/\r?\n/).map(normalizeLine).filter(Boolean);
-  if(rawLines.length===0) return {rows:[], totals:{kpi:null}, warnings, errors:["Pegado de empresa vacío."]};
+function getParsedCompanyFromRec(rec){
+  // ✅ SIEMPRE re-parseamos del texto para asegurar pesoPct correcto
+  const text = rec?.companyText || "";
+  const parsed = parseCompanyPaste(text);
+
+  if(parsed && Array.isArray(parsed.rows) && parsed.rows.length>0) return parsed;
+
+  const fallback = rec?.parsedCompany;
+  return fallback && Array.isArray(fallback.rows) ? fallback : {rows:[], totals:{kpi:null}};
+}
+
+
+  // detecta header
+  let startIdx = rawLines.findIndex(l=>{
+    const x=l.toLowerCase();
+    return x.includes("concept") && x.includes("meta") && x.includes("obten");
+  });
+  if(startIdx===-1){ warnings.push("No detecté header exacto; intentaré parsear igual."); startIdx=0; }
+  else startIdx += 1;
+
+  const rows=[];
+  let kpiReported=null;
+
+  for(let i=startIdx;i<rawLines.length;i++){
+    const line = rawLines[i];
+
+    // footer tipo: "50.79% 100% - -"
+    const footer = line.match(/^\s*([0-9]+(?:\.[0-9]+)?)\s*%\s+/);
+    if(footer && line.includes("-")){
+      kpiReported = Number(footer[1]);
+      continue;
+    }
+
+    // ✅ TAB-AWARE (lo normal cuando copias de tablas)
+    if(line.includes("\t")){
+      const cols = line.split("\t").map(c=>c.trim()).filter(c=>c!=="");
+      if(cols.length < 3) continue;
+
+      const concept = cols[0];
+      if(!concept) continue;
+
+      const meta = safeNum(cols[1]);
+      const obtained = safeNum(cols[2]);
+
+      // ✅ Soportar 6 y 5 columnas:
+      // 6 cols: Concepto | Meta | Obtenido | Obtenido% | Meta% (peso) | Avance%
+      // 5 cols: Concepto | Meta | Obtenido | Meta% (peso) | Avance%
+      let pesoPct = null;
+      let avance = null;
+
+      if(cols.length >= 6){
+        pesoPct = safeNum(cols[4]);
+        avance  = safeNum(cols[5]);
+      }else if(cols.length === 5){
+        pesoPct = safeNum(cols[3]);
+        avance  = safeNum(cols[4]);
+      }else{
+        const percents = line.match(/[0-9]+(?:\.[0-9]+)?\s*%/g) || [];
+        avance = percents.length ? safeNum(percents[percents.length-1]) : null;
+      }
+
+      // Nota tipo (70%) pegada en la meta
+      const metaNoteMatch = cols[1] && String(cols[1]).match(/\(([^)]+)\)/);
+      const metaNote = metaNoteMatch ? `(${metaNoteMatch[1]})` : null;
+
+      rows.push({concept, meta, obtained, avance, pesoPct, metaNote});
+      continue;
+    }
+
+    // ✅ fallback por si viene sin tabs
+    const conceptMatch = line.match(/^\s*([A-Za-zÁÉÍÓÚÑáéíóúñ][^0-9]*)\s+/);
+    if(!conceptMatch) continue;
+    const concept = conceptMatch[1].trim();
+    const after = line.slice(conceptMatch[0].length);
+    const nums = after.match(/[0-9]+(?:\.[0-9]+)?/g) || [];
+    const meta = nums.length>=1 ? safeNum(nums[0]) : null;
+    const obtained = nums.length>=2 ? safeNum(nums[1]) : null;
+
+    const percents = line.match(/[0-9]+(?:\.[0-9]+)?\s*%/g) || [];
+    const avance = percents.length ? safeNum(percents[percents.length-1]) : null;
+
+    rows.push({concept, meta, obtained, avance, pesoPct:null, metaNote:null});
+  }
+
+  if(rows.length===0) errors.push("No detecté filas de conceptos. Revisa el pegado.");
+
+  // KPI semanal: si viene reportado lo usamos; si no, calculamos con pesos si existen.
+  let kpiCalc=null;
+  const hasWeights = rows.some(r=>r.pesoPct!=null && isFinite(r.pesoPct));
+  if(hasWeights){
+    kpiCalc = rows.reduce((s,r)=>{
+      const w = (r.pes
+
 
   // detecta header y salta 1 línea
   let startIdx = rawLines.findIndex(l=>{
