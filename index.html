@@ -711,6 +711,11 @@ function saveCfg(cfg){
 function applyMode(){
   const cfg = loadCfg();
   const mode = cfg.mode || "viewer";
+  // ✅ Ocultar pestaña Config cuando es Viewer
+const configTabBtn = document.querySelector('.tab[data-tab="config"]');
+if (configTabBtn){
+  configTabBtn.style.display = (mode === "viewer") ? "none" : "inline-block";
+}
   $("modeSelect").value = mode;
   $("modePin").value = cfg.pin || "";
   $("modePill").textContent = "Modo: " + (mode==="admin" ? "Admin" : "Viewer");
