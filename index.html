@@ -1279,12 +1279,13 @@ function buildResults(){
     return {avg, count};
   }
 
- const monthlyRows = COMPANIES
+const monthlyRows = COMPANIES
   .map(c => {
     const agg = aggregateMonthlyConcepts(c);
     return { company: c, kpi: agg.kpiMonth, weeks: agg.weeksUsed };
   })
   .sort((a, b) => (b.kpi ?? -1) - (a.kpi ?? -1));
+
 
   monthlyRows.forEach(r=>{
     const matrix = buildWeeklyMatrixHTML(r.company, bucket);
