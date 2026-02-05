@@ -656,6 +656,12 @@ function parseEmployeesPaste(text){
         name=l; break;
       }
     }
+function topEmployees(employees, n=5){
+  return [...employees]
+    .filter(e=>e?.calif!=null && isFinite(e.calif))
+    .sort((a,b)=>(b.calif||-1)-(a.calif||-1))
+    .slice(0,n);
+}
 
     // calificación semanal (la que muestra el sistema)
     let calif=null;
@@ -1372,10 +1378,10 @@ const monthlyRows = COMPANIES
   $("resCompanyKpi").textContent = hasAny ? ("Promedio mes: " + fmtPct(avgKpi)) : "";
 
   // 2) Ranking empleados (empresa) Mes/Semana
-  const viewEmp = $("empWeekView") ? $("empWeekView").value : "mes";
-  let empRank=[];
+const viewEmp = $("empWeekView") ? $("empWeekView").value : "mes";
+let empRank = [];
 
- if(viewEmp==="mes"){
+if(viewEmp === "mes"){
   const empBlocks = new Map(); // name -> [{week, rows}]
   for(let w=1; w<=5; w++){
     const rec = bucket[makeKey(company, String(w))];
@@ -1393,22 +1399,25 @@ const monthlyRows = COMPANIES
     });
   }
 
-  empRank = [...empBlocks.entries()].map(([name,blocks])=>{
-    const r = aggregateEmployeeMonthScore(blocks);
-    return {name, avg:r.score, weeks:r.weeks};
-  }).sort((a,b)=>(b.avg??-1)-(a.avg??-1));
+  empRank = [...empBlocks.entries()]
+    .map(([name, blocks]) => {
+      const r = aggregateEmployeeMonthScore(blocks);
+      return { name, avg: r.score, weeks: r.weeks };
+    })
+    .sort((a,b)=>(b.avg??-1)-(a.avg??-1));
+
+}else{
+  const rec = bucket[makeKey(company, String(viewEmp))];
+  const pe = rec ? getParsedEmployeesFromRec(rec) : {employees:[]};
+  const emps = asArray(pe.employees);
+
+  // Semana: usamos calif (porque es lo que viene “cerrado”)
+  empRank = emps
+    .filter(e=>e?.calif!=null && isFinite(e.calif))
+    .map(e=>({name:e.name, avg:e.calif, weeks:1}))
+    .sort((a,b)=>b.avg-a.avg);
 }
 
-    empRank = [...empMap.entries()].map(([name,o])=>({name, avg:o.sum/o.count, weeks:o.count}))
-      .sort((a,b)=>b.avg-a.avg);
-  }else{
-    const rec = bucket[makeKey(company, String(viewEmp))];
-    const pe = rec ? getParsedEmployeesFromRec(rec) : {employees:[]};
-    const emps = asArray(pe.employees);
-    empRank = emps.filter(e=>e?.calif!=null && isFinite(e.calif))
-      .map(e=>({name:e.name, avg:e.calif, weeks:1}))
-      .sort((a,b)=>b.avg-a.avg);
-  }
 
   const empTbody = $("resEmpRank").querySelector("tbody");
   empTbody.innerHTML="";
@@ -1448,14 +1457,14 @@ const monthlyRows = COMPANIES
     renderWeek(Number(weekFilter));
   }
 
-  // 4) Ranking general (todas) Mes/Semana
-  const viewGlobal = $("globalWeekView") ? $("globalWeekView").value : "mes";
-  const gBody = $("globalRank").querySelector("tbody");
-  gBody.innerHTML="";
+// 4) Ranking general (todas) Mes/Semana
+const viewGlobal = $("globalWeekView") ? $("globalWeekView").value : "mes";
+const gBody = $("globalRank").querySelector("tbody");
+gBody.innerHTML="";
 
-  let globalRank=[];
+let globalRank = [];
 
-  if(viewGlobal==="mes"){
+if(viewGlobal === "mes"){
   const globalBlocks = new Map(); // key name||company -> {name, company, blocks:[]}
 
   for(const c of COMPANIES){
@@ -1476,6 +1485,34 @@ const monthlyRows = COMPANIES
       });
     }
   }
+
+  globalRank = [...globalBlocks.values()]
+    .map(o=>{
+      const r = aggregateEmployeeMonthScore(o.blocks);
+      return {name:o.name, company:o.company, avg:r.score, weeks:r.weeks};
+    })
+    .sort((a,b)=>(b.avg??-1)-(a.avg??-1));
+
+}else{
+  const w = String(viewGlobal);
+  const list = [];
+
+  for(const c of COMPANIES){
+    const rec = bucket[makeKey(c, w)];
+    if(!rec) continue;
+
+    const pe = getParsedEmployeesFromRec(rec);
+    const emps = asArray(pe.employees);
+
+    emps.forEach(e=>{
+      if(e?.calif==null || !isFinite(e.calif)) return;
+      list.push({name:e.name, company:c, avg:e.calif, weeks:1});
+    });
+  }
+
+  globalRank = list.sort((a,b)=>b.avg-a.avg);
+}
+
 
   globalRank = [...globalBlocks.values()].map(o=>{
     const r = aggregateEmployeeMonthScore(o.blocks);
