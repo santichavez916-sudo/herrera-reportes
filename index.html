@@ -915,7 +915,7 @@ function colorByEfficiency(pct){
 
 function renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany}){
   const rankData = COMPANIES.map(c=>{
-    const kpi = aggregateMonthlyConcepts(c).kpiAvg;
+    const kpi = aggregateMonthlyConcepts(c).kpiMonth;
     return {company:c, value:(kpi!=null && isFinite(kpi))?kpi:0, has:(kpi!=null && isFinite(kpi))};
   }).sort((a,b)=>b.value-a.value);
 
@@ -1207,10 +1207,12 @@ function buildResults(){
     return {avg, count};
   }
 
-  const monthlyRows = COMPANIES.map(c=>{
+ const monthlyRows = COMPANIES
+  .map(c => {
     const agg = aggregateMonthlyConcepts(c);
-    return {company:c, kpi:agg.kpiMonth, weeks:agg.weeksUsed};};
-  }).sort((a,b)=>(b.kpi??-1)-(a.kpi??-1));
+    return { company: c, kpi: agg.kpiMonth, weeks: agg.weeksUsed };
+  })
+  .sort((a, b) => (b.kpi ?? -1) - (a.kpi ?? -1));
 
   monthlyRows.forEach(r=>{
     const matrix = buildWeeklyMatrixHTML(r.company, bucket);
