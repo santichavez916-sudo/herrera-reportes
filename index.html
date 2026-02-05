@@ -1,4 +1,4 @@
-<!†DOCTYPE html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
@@ -1140,42 +1140,54 @@ function buildResults(){
   const monthlyTbody = $("cmpMonthly").querySelector("tbody");
   monthlyTbody.innerHTML="";
 
-  function aggregateMonthlyConcepts(companyName){
-    const map = new Map();
-    let weeksUsed=0;
-    const kpis=[];
+ function aggregateMonthlyConcepts(companyName){
+  const map = new Map();
+  let weeksUsed=0;
+  const kpis=[];
 
-    for(let w=1; w<=5; w++){
-      const rec = bucket[makeKey(companyName, String(w))];
-      if(!rec) continue;
+  let metaTotal=0;
+  let obtainedTotal=0;
 
-      const pc = getParsedCompanyFromRec(rec);
-      const rows = asArray(pc.rows);
-      if(rows.length===0) continue;
+  for(let w=1; w<=5; w++){
+    const rec = bucket[makeKey(companyName, String(w))];
+    if(!rec) continue;
 
-      weeksUsed++;
-      const kpi = pc?.totals?.kpi ?? null;
-      if(kpi!=null && isFinite(kpi)) kpis.push(kpi);
+    const pc = getParsedCompanyFromRec(rec);
+    const rows = asArray(pc.rows);
+    if(rows.length===0) continue;
 
-      rows.forEach(r=>{
-        const key=r.concept;
-        if(!key) return;
-        if(!map.has(key)) map.set(key, {metaSum:0, obtainedSum:0, metaNote:r.metaNote||null});
-        const o=map.get(key);
-        o.metaSum += (r.meta||0);
-        o.obtainedSum += (r.obtained||0);
-        if(r.metaNote) o.metaNote = r.metaNote;
-      });
-    }
+    weeksUsed++;
+    const kpi = pc?.totals?.kpi ?? null;
+    if(kpi!=null && isFinite(kpi)) kpis.push(kpi);
 
-    const rows = [...map.entries()].map(([concept,o])=>{
-      const avance = o.metaSum>0 ? (o.obtainedSum/o.metaSum)*100 : null;
-      return {concept, meta:o.metaSum, obtained:o.obtainedSum, avance, metaNote:o.metaNote};
+    rows.forEach(r=>{
+      const key=r.concept;
+      if(!key) return;
+
+      if(!map.has(key)) map.set(key, {metaSum:0, obtainedSum:0, metaNote:r.metaNote||null});
+      const o=map.get(key);
+
+      o.metaSum += (r.meta||0);
+      o.obtainedSum += (r.obtained||0);
+
+      metaTotal += (r.meta||0);
+      obtainedTotal += (r.obtained||0);
+
+      if(r.metaNote) o.metaNote = r.metaNote;
     });
-
-    const kpiAvg = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
-    return {rows, weeksUsed, kpiAvg};
   }
+
+  const rows = [...map.entries()].map(([concept,o])=>{
+    const avance = o.metaSum>0 ? (o.obtainedSum/o.metaSum)*100 : null;
+    return {concept, meta:o.metaSum, obtained:o.obtainedSum, avance, metaNote:o.metaNote};
+  });
+
+  const kpiAvg = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
+  const kpiMonth = metaTotal>0 ? (obtainedTotal/metaTotal)*100 : null;
+
+  return {rows, weeksUsed, kpiAvg, kpiMonth, metaTotal, obtainedTotal};
+}
+
 
   /* ✅ SOLO PARA GRAFICA 2 (NO MODIFICA LO DEMÁS) */
   function employeeEfficiencyByCompany(companyName){
@@ -1197,7 +1209,7 @@ function buildResults(){
 
   const monthlyRows = COMPANIES.map(c=>{
     const agg = aggregateMonthlyConcepts(c);
-    return {company:c, kpi:agg.kpiAvg, weeks:agg.weeksUsed};
+    return {company:c, kpi:agg.kpiMonth, weeks:agg.weeksUsed};};
   }).sort((a,b)=>(b.kpi??-1)-(a.kpi??-1));
 
   monthlyRows.forEach(r=>{
