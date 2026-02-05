@@ -94,7 +94,6 @@
 
   <!-- DATOS -->
   <div id="tab-datos" class="grid">
-
     <div class="card">
       <div class="split">
         <div>
@@ -216,12 +215,10 @@
         Tip: si quieres que el viewer vea EXACTAMENTE lo mismo, usa <b>Exportar JSON</b> (admin) y luego <b>Importar JSON</b> (viewer).
       </p>
     </div>
-
   </div>
 
   <!-- RESULTADOS -->
   <div id="tab-resultados" class="grid" style="display:none">
-
     <div class="card">
       <div class="sectionTitle">
         <h2>Resultados</h2>
@@ -250,7 +247,7 @@
 
       <div id="resMsg" class="msg warn" style="display:none;margin-top:10px"></div>
 
-      <!-- ✅ SOLO SE AGREGA ESTE BLOQUE DE GRAFICAS (NO QUITA / NO MUEVE LO DEMÁS) -->
+      <!-- ✅ GRAFICAS -->
       <div class="card" style="padding:14px;margin-top:12px">
         <div class="sectionTitle">
           <h2 style="font-size:14px;margin:0">Gráficas (mes acumulado)</h2>
@@ -511,7 +508,7 @@ const CFG_KEY = "herrera_cfg_v1";
 function $(id){ return document.getElementById(id); }
 function fmtPct(n){
   if(n==null || !isFinite(n)) return "—";
-  return n.toFixed(2) + "%";
+  return Number(n).toFixed(2) + "%";
 }
 function safeNum(s){
   if(s==null) return null;
@@ -520,8 +517,6 @@ function safeNum(s){
   const n = Number(t);
   return isFinite(n) ? n : null;
 }
-
-// ✅ IMPORTANTE: ya NO aplastamos espacios (esto era el bug)
 function normalizeLine(s){
   return String(s).replace(/\u00a0/g," ").trim();
 }
@@ -548,17 +543,16 @@ function makeKey(company, week){ return company + "||" + week; }
 
 /** ==============================
  *  Parser Empresa (ROBUSTO)
- *  - funciona con tabs o espacios
  *  - meta = primer número
  *  - obtenido = segundo número
  *  - avance = ÚLTIMO porcentaje de la línea
+ *  - KPI semanal = footer "xx% 100% - -"
  *  ============================== */
 function parseCompanyPaste(text){
   const warnings=[], errors=[];
   const rawLines = String(text||"").split(/\r?\n/).map(normalizeLine).filter(Boolean);
   if(rawLines.length===0) return {rows:[], totals:{metaSum:0,obtainedSum:0,kpi:null}, warnings, errors:["Pegado de empresa vacío."]};
 
-  // detecta header
   let startIdx = rawLines.findIndex(l=>{
     const x=l.toLowerCase();
     return x.includes("concept") && x.includes("meta") && x.includes("obten");
@@ -572,35 +566,27 @@ function parseCompanyPaste(text){
   for(let i=startIdx;i<rawLines.length;i++){
     const line = rawLines[i];
 
-    // footer tipo: "50.79% 100% - -"
-    // tomamos el PRIMER porcentaje como KPI reportado
     const footer = line.match(/^\s*([0-9]+(?:\.[0-9]+)?)\s*%\s+/);
     if(footer && line.includes("-")){
       kpiReported = Number(footer[1]);
       continue;
     }
 
-    // concepto = texto al inicio hasta que empiece número
-    // ejemplo: "Afluencia 92.5 31.0 2.2% 6.67 33.5%"
     const conceptMatch = line.match(/^\s*([A-Za-zÁÉÍÓÚÑáéíóúñ][^0-9]*)\s+/);
     if(!conceptMatch) continue;
     const concept = conceptMatch[1].trim();
     if(!concept) continue;
 
-    // meta puede venir: "4.9 (70%)"
-    // buscamos el primer número y posible nota () inmediatamente después
     const afterConcept = line.slice(conceptMatch[0].length);
+
     const metaMatch = afterConcept.match(/^([0-9]+(?:\.[0-9]+)?)\s*(\([^)]+\))?/);
     const meta = metaMatch ? safeNum(metaMatch[1]) : null;
     const metaNote = metaMatch && metaMatch[2] ? metaMatch[2].trim() : null;
 
-    // obtenido = el SIGUIENTE número después del meta
-    // tomamos todos los números en orden
     const nums = afterConcept.match(/[0-9]+(?:\.[0-9]+)?/g) || [];
     const metaFromNums = nums.length>=1 ? safeNum(nums[0]) : meta;
     const obtained = nums.length>=2 ? safeNum(nums[1]) : null;
 
-    // avance% = el ÚLTIMO porcentaje de la línea
     const percents = line.match(/[0-9]+(?:\.[0-9]+)?\s*%/g) || [];
     let avance = null;
     if(percents.length){
@@ -615,15 +601,24 @@ function parseCompanyPaste(text){
 
   const metaSum = rows.reduce((a,r)=>a+(r.meta||0),0);
   const obtainedSum = rows.reduce((a,r)=>a+(r.obtained||0),0);
+
   const kpiCalc = metaSum>0 ? (obtainedSum/metaSum)*100 : null;
   const kpi = (kpiReported!=null) ? kpiReported : kpiCalc;
+
   if(kpiReported==null) warnings.push("No detecté KPI reportado (footer). Usaré KPI calculado.");
 
   return { rows, totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported}, warnings, errors };
 }
 
 /** ==============================
- *  Parser Empleados (igual)
+ *  Parser Empleados (MUY ROBUSTO)
+ *  - toma agenda
+ *  - toma nombre
+ *  - toma calif semanal
+ *  - toma tabla por concepto aunque venga:
+ *      a) con tabs
+ *      b) con espacios múltiples
+ *      c) con espacios normales (regex)
  *  ============================== */
 function parseEmployeesPaste(text){
   const warnings=[], errors=[];
@@ -642,11 +637,9 @@ function parseEmployeesPaste(text){
     const end=(s+1<starts.length)?starts[s+1]:lines.length;
     const block=lines.slice(start,end);
 
-    // agenda
     const agenda = Number((block[0].match(/^agenda:\s*(\d+)/i)||[])[1] || NaN);
     const agendaVal = isFinite(agenda)?agenda:null;
 
-    // nombre
     let name="SIN NOMBRE";
     for(let i=1;i<Math.min(block.length,10);i++){
       const l=block[i];
@@ -657,48 +650,58 @@ function parseEmployeesPaste(text){
       }
     }
 
-
-    // calificación semanal (la que muestra el sistema)
     let calif=null;
     for(const l of block){
       const m=l.match(/^calificacion\s+obtenida:\s*([0-9]+(?:\.[0-9]+)?)\s*%/i);
       if(m){ calif=Number(m[1]); break; }
     }
 
-    // ✅ tabla por concepto (tabulada)
-    // esperamos header tipo: "Concepto  Obtenido  Meta  %  %/100"
     const rows=[];
     const headerIdx = block.findIndex(l=>{
       const x=l.toLowerCase();
       return x.startsWith("concepto") && x.includes("obten") && x.includes("meta");
     });
 
+    function tryParseConceptLine(line){
+      // 1) split por tabs o espacios múltiples
+      const cols = line.split(/\t+|\s{2,}/).map(x=>x.trim()).filter(Boolean);
+      if(cols.length >= 4){
+        return {
+          concept: cols[0],
+          obtained: safeNum(cols[1]),
+          meta: safeNum(cols[2]),
+          pesoPct: safeNum(cols[3])
+        };
+      }
+      // 2) fallback regex: "Concepto  10  12  2.9% ..."
+      // permite conceptos con espacios, pero requiere 3 números después
+      const m = line.match(/^\s*(.+?)\s+([0-9]+(?:\.[0-9]+)?)\s+([0-9]+(?:\.[0-9]+)?)\s+([0-9]+(?:\.[0-9]+)?)\s*%?\s*$/);
+      if(m){
+        return {
+          concept: m[1].trim(),
+          obtained: safeNum(m[2]),
+          meta: safeNum(m[3]),
+          pesoPct: safeNum(m[4])
+        };
+      }
+      return null;
+    }
+
     if(headerIdx !== -1){
       for(let i=headerIdx+1;i<block.length;i++){
         const l = block[i];
 
-        // corta cuando empieza sección "Citas" o tabla "Total..."
         if(/^citas\b/i.test(l)) break;
         if(/^total\b/i.test(l)) break;
 
-        // muchas líneas vienen con tabs
-        if(!l.includes("\t")) continue;
+        // evita líneas claramente no tabla
+        if(!/[0-9]/.test(l)) continue;
 
-        const cols = l.split("\t").map(x=>x.trim()).filter(Boolean);
-        // Concepto | Obtenido | Meta | % | %/100
-        if(cols.length < 4) continue;
+        const parsed = tryParseConceptLine(l);
+        if(!parsed) continue;
+        if(!parsed.concept) continue;
 
-        const concept = cols[0];
-        const obtained = safeNum(cols[1]);
-        const meta = safeNum(cols[2]);
-
-        // el peso está en la columna "%"
-        // puede venir como "2.9%" o "2.9"
-        const pesoPct = safeNum(cols[3]);
-
-        if(!concept) continue;
-
-        rows.push({concept, obtained, meta, pesoPct});
+        rows.push(parsed);
       }
     }
 
@@ -710,6 +713,7 @@ function parseEmployeesPaste(text){
 
   return { employees, warnings, errors };
 }
+
 function topEmployees(employees, n=5){
   return [...employees]
     .filter(e=>e?.calif!=null && isFinite(e.calif))
@@ -717,7 +721,6 @@ function topEmployees(employees, n=5){
     .slice(0,n);
 }
 
-  
 /** ==============================
  *  UI helpers
  *  ============================== */
@@ -803,9 +806,9 @@ function preview(){
     const tr=document.createElement("tr");
     tr.innerHTML = `
       <td>${r.concept}</td>
-      <td class="num">${r.meta==null?"—":(r.meta.toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
-      <td class="num">${r.obtained==null?"—":r.obtained.toFixed(2)}</td>
-      <td class="num">${r.avance==null?"—":r.avance.toFixed(2)+"%"}</td>
+      <td class="num">${r.meta==null?"—":(Number(r.meta).toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
+      <td class="num">${r.obtained==null?"—":Number(r.obtained).toFixed(2)}</td>
+      <td class="num">${r.avance==null?"—":Number(r.avance).toFixed(2)+"%"}</td>
     `;
     tb.appendChild(tr);
   });
@@ -933,7 +936,6 @@ function clearAll(){
   setMsg($("msgTop"), "Borrado local ✅", "ok");
 }
 
-/** Abrir/cerrar todos los desgloses mensuales */
 function setMonthlyBreakdowns(open){
   const table = document.getElementById("cmpMonthly");
   if(!table) return;
@@ -942,7 +944,7 @@ function setMonthlyBreakdowns(open){
 }
 
 /** ==============================
- *  ✅ GRAFICAS (SOLO AGREGADO)
+ *  ✅ GRAFICAS
  *  ============================== */
 let CHART_RANKING = null;
 let CHART_EFF = null;
@@ -958,8 +960,9 @@ function colorByEfficiency(pct){
 }
 
 function renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany}){
+  // ✅ KPI mes = PROMEDIO de KPIs semanales (kpiAvg). Esto evita 200%+.
   const rankData = COMPANIES.map(c=>{
-    const kpi = aggregateMonthlyConcepts(c).kpiMonth;
+    const kpi = aggregateMonthlyConcepts(c).kpiAvg;
     return {company:c, value:(kpi!=null && isFinite(kpi))?kpi:0, has:(kpi!=null && isFinite(kpi))};
   }).sort((a,b)=>b.value-a.value);
 
@@ -1030,8 +1033,8 @@ function renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany}){
 const asArray = (x)=> Array.isArray(x) ? x : [];
 function cap01(x){ return Math.max(0, Math.min(1, x)); }
 
+// score devuelve porcentaje (0-100 aprox) porque pesos suelen sumar 100
 function computeScoreFromConceptSums(concepts){
-  // concepts: [{metaSum, obtainedSum, pesoPct}]
   return concepts.reduce((s,c)=>{
     const w = (c.pesoPct!=null && isFinite(c.pesoPct)) ? c.pesoPct : 0;
     const ratio = (c.metaSum && c.metaSum>0) ? (c.obtainedSum/c.metaSum) : 0;
@@ -1040,8 +1043,7 @@ function computeScoreFromConceptSums(concepts){
 }
 
 function aggregateEmployeeMonthScore(blocks){
-  // blocks: [{week, rows:[{concept, obtained, meta, pesoPct}]}]
-  const map = new Map(); // concept -> {metaSum, obtainedSum, pesoPct}
+  const map = new Map();
   const weeksSet = new Set();
 
   for(const b of blocks){
@@ -1065,7 +1067,6 @@ function aggregateEmployeeMonthScore(blocks){
   return {score, weeks: weeksSet.size, concepts};
 }
 
-// ✅ Re-parsea desde texto si rows quedaron vacías (por datos guardados con parser viejo)
 function getParsedCompanyFromRec(rec){
   const parsed = rec?.parsedCompany;
   if(parsed && Array.isArray(parsed.rows) && parsed.rows.length>0) return parsed;
@@ -1089,12 +1090,11 @@ function buildWeeklyMatrixHTML(companyName, bucket){
       .replace(/á/g,"a").replace(/é/g,"e").replace(/í/g,"i").replace(/ó/g,"o").replace(/ú/g,"u");
   }
 
-  // recolecta semanas
-  const weeks = [];
   const weekKpis = [];
   for(let w=1; w<=5; w++){
     const rec = bucket[makeKey(companyName, String(w))];
     if(!rec) continue;
+
     const pc = getParsedCompanyFromRec(rec);
     const rows = asArray(pc.rows);
     if(rows.length===0) continue;
@@ -1102,7 +1102,6 @@ function buildWeeklyMatrixHTML(companyName, bucket){
     const kpi = pc?.totals?.kpi ?? null;
     if(kpi!=null && isFinite(kpi)) weekKpis.push({w, kpi});
 
-    weeks.push({w, rows});
     for(const r of rows){
       const key = normConcept(r.concept);
       if(!key) continue;
@@ -1120,7 +1119,6 @@ function buildWeeklyMatrixHTML(companyName, bucket){
     return `<div class="msg warn">Sin datos para construir matriz (no se detectaron conceptos).</div>`;
   }
 
-  // orden de conceptos: primero los conocidos, luego el resto
   const keys = [...conceptMap.keys()];
   keys.sort((a,b)=>{
     const ia = conceptsOrder.map(normConcept).indexOf(a);
@@ -1134,10 +1132,7 @@ function buildWeeklyMatrixHTML(companyName, bucket){
   const weekCols = [1,2,3,4,5];
   const avgMonth = weekKpis.length ? (weekKpis.reduce((s,x)=>s+x.kpi,0)/weekKpis.length) : null;
 
-  const headWeek = (w)=>`
-    <th colspan="3" class="right">Semana ${w}</th>
-  `;
-
+  const headWeek = (w)=>`<th colspan="3" class="right">Semana ${w}</th>`;
   const subHead = (label)=>`<th class="right">${label}</th>`;
 
   const rowsHtml = keys.map(k=>{
@@ -1149,11 +1144,7 @@ function buildWeeklyMatrixHTML(companyName, bucket){
       const meta = cell.meta==null ? "—" : (Number(cell.meta).toFixed(2) + (cell.note?(" "+cell.note):""));
       const obt  = cell.obt==null ? "—" : Number(cell.obt).toFixed(2);
       const av   = cell.av==null ? "—" : Number(cell.av).toFixed(2)+"%";
-      return `
-        <td class="num">${meta}</td>
-        <td class="num">${obt}</td>
-        <td class="num">${av}</td>
-      `;
+      return `<td class="num">${meta}</td><td class="num">${obt}</td><td class="num">${av}</td>`;
     }).join("");
 
     return `
@@ -1167,7 +1158,6 @@ function buildWeeklyMatrixHTML(companyName, bucket){
     `;
   }).join("");
 
-  // fila avance general
   const advanceRow = `
     <tr>
       <td><b>Avance General</b></td>
@@ -1216,60 +1206,58 @@ function buildResults(){
   const data = loadData();
   const bucket = (((data||{})[year]||{})[month]||{});
 
-  // 0) Comparativo mensual
   const monthlyTbody = $("cmpMonthly").querySelector("tbody");
   monthlyTbody.innerHTML="";
 
- function aggregateMonthlyConcepts(companyName){
-  const map = new Map();
-  let weeksUsed=0;
-  const kpis=[];
+  function aggregateMonthlyConcepts(companyName){
+    const map = new Map();
+    let weeksUsed=0;
+    const kpis=[];
 
-  let metaTotal=0;
-  let obtainedTotal=0;
+    // totales se siguen calculando por si quieres verlos, pero KPI mes oficial = kpiAvg
+    let metaTotal=0;
+    let obtainedTotal=0;
 
-  for(let w=1; w<=5; w++){
-    const rec = bucket[makeKey(companyName, String(w))];
-    if(!rec) continue;
+    for(let w=1; w<=5; w++){
+      const rec = bucket[makeKey(companyName, String(w))];
+      if(!rec) continue;
 
-    const pc = getParsedCompanyFromRec(rec);
-    const rows = asArray(pc.rows);
-    if(rows.length===0) continue;
+      const pc = getParsedCompanyFromRec(rec);
+      const rows = asArray(pc.rows);
+      if(rows.length===0) continue;
 
-    weeksUsed++;
-    const kpi = pc?.totals?.kpi ?? null;
-    if(kpi!=null && isFinite(kpi)) kpis.push(kpi);
+      weeksUsed++;
+      const kpi = pc?.totals?.kpi ?? null;
+      if(kpi!=null && isFinite(kpi)) kpis.push(kpi);
 
-    rows.forEach(r=>{
-      const key=r.concept;
-      if(!key) return;
+      rows.forEach(r=>{
+        const key=r.concept;
+        if(!key) return;
 
-      if(!map.has(key)) map.set(key, {metaSum:0, obtainedSum:0, metaNote:r.metaNote||null});
-      const o=map.get(key);
+        if(!map.has(key)) map.set(key, {metaSum:0, obtainedSum:0, metaNote:r.metaNote||null});
+        const o=map.get(key);
 
-      o.metaSum += (r.meta||0);
-      o.obtainedSum += (r.obtained||0);
+        o.metaSum += (r.meta||0);
+        o.obtainedSum += (r.obtained||0);
 
-      metaTotal += (r.meta||0);
-      obtainedTotal += (r.obtained||0);
+        metaTotal += (r.meta||0);
+        obtainedTotal += (r.obtained||0);
 
-      if(r.metaNote) o.metaNote = r.metaNote;
+        if(r.metaNote) o.metaNote = r.metaNote;
+      });
+    }
+
+    const rows = [...map.entries()].map(([concept,o])=>{
+      const avance = o.metaSum>0 ? (o.obtainedSum/o.metaSum)*100 : null;
+      return {concept, meta:o.metaSum, obtained:o.obtainedSum, avance, metaNote:o.metaNote};
     });
+
+    const kpiAvg = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
+    const kpiMonth_raw = metaTotal>0 ? (obtainedTotal/metaTotal)*100 : null; // SOLO informativo
+
+    return {rows, weeksUsed, kpiAvg, kpiMonth_raw, metaTotal, obtainedTotal};
   }
 
-  const rows = [...map.entries()].map(([concept,o])=>{
-    const avance = o.metaSum>0 ? (o.obtainedSum/o.metaSum)*100 : null;
-    return {concept, meta:o.metaSum, obtained:o.obtainedSum, avance, metaNote:o.metaNote};
-  });
-
-  const kpiAvg = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
-  const kpiMonth = metaTotal>0 ? (obtainedTotal/metaTotal)*100 : null;
-
-  return {rows, weeksUsed, kpiAvg, kpiMonth, metaTotal, obtainedTotal};
-}
-
-
-  /* ✅ SOLO PARA GRAFICA 2 (NO MODIFICA LO DEMÁS) */
   function employeeEfficiencyByCompany(companyName){
     let sum=0, count=0;
     for(let w=1; w<=5; w++){
@@ -1287,13 +1275,13 @@ function buildResults(){
     return {avg, count};
   }
 
-const monthlyRows = COMPANIES
-  .map(c => {
-    const agg = aggregateMonthlyConcepts(c);
-    return { company: c, kpi: agg.kpiMonth, weeks: agg.weeksUsed };
-  })
-  .sort((a, b) => (b.kpi ?? -1) - (a.kpi ?? -1));
-
+  // ✅ KPI mensual oficial = PROMEDIO KPI SEMANAL (kpiAvg)
+  const monthlyRows = COMPANIES
+    .map(c => {
+      const agg = aggregateMonthlyConcepts(c);
+      return { company: c, kpi: agg.kpiAvg, weeks: agg.weeksUsed };
+    })
+    .sort((a, b) => (b.kpi ?? -1) - (a.kpi ?? -1));
 
   monthlyRows.forEach(r=>{
     const matrix = buildWeeklyMatrixHTML(r.company, bucket);
@@ -1312,11 +1300,9 @@ const monthlyRows = COMPANIES
     monthlyTbody.appendChild(tr);
   });
 
-  // ✅ Matriz del mes (empresa seleccionada)
   const matrixBox = $("companyMatrixBox");
   matrixBox.innerHTML = buildWeeklyMatrixHTML(company, bucket);
 
-  // 1) Empresa por semanas
   const weeksTbody = $("resWeeksTable").querySelector("tbody");
   weeksTbody.innerHTML="";
   const kpis=[];
@@ -1380,46 +1366,64 @@ const monthlyRows = COMPANIES
   $("resCompanyKpi").textContent = hasAny ? ("Promedio mes: " + fmtPct(avgKpi)) : "";
 
   // 2) Ranking empleados (empresa) Mes/Semana
-const viewEmp = $("empWeekView") ? $("empWeekView").value : "mes";
-let empRank = [];
+  const viewEmp = $("empWeekView") ? $("empWeekView").value : "mes";
+  let empRank = [];
 
-if(viewEmp === "mes"){
-  const empBlocks = new Map(); // name -> [{week, rows}]
-  for(let w=1; w<=5; w++){
-    const rec = bucket[makeKey(company, String(w))];
-    if(!rec) continue;
+  if(viewEmp === "mes"){
+    const empBlocks = new Map(); // name -> [{week, rows}]
+    for(let w=1; w<=5; w++){
+      const rec = bucket[makeKey(company, String(w))];
+      if(!rec) continue;
 
-    const pe = getParsedEmployeesFromRec(rec);
+      const pe = getParsedEmployeesFromRec(rec);
+      const emps = asArray(pe.employees);
+
+      emps.forEach(e=>{
+        if(!e?.name || e.name==="SIN NOMBRE") return;
+        // ✅ ya no dependemos de tabs; parser robusto
+        if(!Array.isArray(e.rows) || e.rows.length===0) return;
+
+        if(!empBlocks.has(e.name)) empBlocks.set(e.name, []);
+        empBlocks.get(e.name).push({week:w, rows:e.rows});
+      });
+    }
+
+    empRank = [...empBlocks.entries()]
+      .map(([name, blocks]) => {
+        const r = aggregateEmployeeMonthScore(blocks);
+        return { name, avg: r.score, weeks: r.weeks };
+      })
+      .sort((a,b)=>(b.avg??-1)-(a.avg??-1));
+
+    // ✅ fallback: si por algún motivo nadie trae rows, usa promedio de calif para no quedar vacío
+    if(empRank.length===0){
+      const map = new Map();
+      for(let w=1; w<=5; w++){
+        const rec = bucket[makeKey(company, String(w))];
+        if(!rec) continue;
+        const pe = getParsedEmployeesFromRec(rec);
+        const emps = asArray(pe.employees);
+        emps.forEach(e=>{
+          if(e?.calif==null || !isFinite(e.calif)) return;
+          if(!map.has(e.name)) map.set(e.name, {sum:0,count:0});
+          const o = map.get(e.name);
+          o.sum += e.calif; o.count += 1;
+        });
+      }
+      empRank = [...map.entries()].map(([name,o])=>({name, avg:o.sum/o.count, weeks:o.count}))
+        .sort((a,b)=>b.avg-a.avg);
+    }
+
+  }else{
+    const rec = bucket[makeKey(company, String(viewEmp))];
+    const pe = rec ? getParsedEmployeesFromRec(rec) : {employees:[]};
     const emps = asArray(pe.employees);
 
-    emps.forEach(e=>{
-      if(!e?.name || e.name==="SIN NOMBRE") return;
-      if(!Array.isArray(e.rows) || e.rows.length===0) return;
-
-      if(!empBlocks.has(e.name)) empBlocks.set(e.name, []);
-      empBlocks.get(e.name).push({week:w, rows:e.rows});
-    });
+    empRank = emps
+      .filter(e=>e?.calif!=null && isFinite(e.calif))
+      .map(e=>({name:e.name, avg:e.calif, weeks:1}))
+      .sort((a,b)=>b.avg-a.avg);
   }
-
-  empRank = [...empBlocks.entries()]
-    .map(([name, blocks]) => {
-      const r = aggregateEmployeeMonthScore(blocks);
-      return { name, avg: r.score, weeks: r.weeks };
-    })
-    .sort((a,b)=>(b.avg??-1)-(a.avg??-1));
-
-}else{
-  const rec = bucket[makeKey(company, String(viewEmp))];
-  const pe = rec ? getParsedEmployeesFromRec(rec) : {employees:[]};
-  const emps = asArray(pe.employees);
-
-  // Semana: usamos calif (porque es lo que viene “cerrado”)
-  empRank = emps
-    .filter(e=>e?.calif!=null && isFinite(e.calif))
-    .map(e=>({name:e.name, avg:e.calif, weeks:1}))
-    .sort((a,b)=>b.avg-a.avg);
-}
-
 
   const empTbody = $("resEmpRank").querySelector("tbody");
   empTbody.innerHTML="";
@@ -1459,61 +1463,80 @@ if(viewEmp === "mes"){
     renderWeek(Number(weekFilter));
   }
 
-// 4) Ranking general (todas) Mes/Semana
-const viewGlobal = $("globalWeekView") ? $("globalWeekView").value : "mes";
-const gBody = $("globalRank").querySelector("tbody");
-gBody.innerHTML = "";
+  // 4) Ranking general (todas) Mes/Semana
+  const viewGlobal = $("globalWeekView") ? $("globalWeekView").value : "mes";
+  const gBody = $("globalRank").querySelector("tbody");
+  gBody.innerHTML = "";
 
-let globalRank = [];
+  let globalRank = [];
 
-if(viewGlobal === "mes"){
-  const globalBlocks = new Map(); // key name||company -> {name, company, blocks:[]}
+  if(viewGlobal === "mes"){
+    const globalBlocks = new Map(); // key name||company -> {name, company, blocks:[]}
 
-  for(const c of COMPANIES){
-    for(let w=1; w<=5; w++){
-      const rec = bucket[makeKey(c, String(w))];
+    for(const c of COMPANIES){
+      for(let w=1; w<=5; w++){
+        const rec = bucket[makeKey(c, String(w))];
+        if(!rec) continue;
+
+        const pe = getParsedEmployeesFromRec(rec);
+        const emps = asArray(pe.employees);
+
+        emps.forEach(e=>{
+          if(!e?.name || e.name==="SIN NOMBRE") return;
+          if(!Array.isArray(e.rows) || e.rows.length===0) return;
+
+          const key = e.name + "||" + c;
+          if(!globalBlocks.has(key)) globalBlocks.set(key, {name:e.name, company:c, blocks:[]});
+          globalBlocks.get(key).blocks.push({week:w, rows:e.rows});
+        });
+      }
+    }
+
+    globalRank = [...globalBlocks.values()]
+      .map(o=>{
+        const r = aggregateEmployeeMonthScore(o.blocks);
+        return {name:o.name, company:o.company, avg:r.score, weeks:r.weeks};
+      })
+      .sort((a,b)=>(b.avg??-1)-(a.avg??-1));
+
+    // fallback si quedó vacío: usa promedio calif
+    if(globalRank.length===0){
+      const map = new Map(); // key name||company -> {sum,count}
+      for(const c of COMPANIES){
+        for(let w=1; w<=5; w++){
+          const rec = bucket[makeKey(c, String(w))];
+          if(!rec) continue;
+          const pe = getParsedEmployeesFromRec(rec);
+          const emps = asArray(pe.employees);
+          emps.forEach(e=>{
+            if(e?.calif==null || !isFinite(e.calif)) return;
+            const key = e.name + "||" + c;
+            if(!map.has(key)) map.set(key, {name:e.name, company:c, sum:0, count:0});
+            const o = map.get(key);
+            o.sum += e.calif; o.count += 1;
+          });
+        }
+      }
+      globalRank = [...map.values()].map(o=>({name:o.name, company:o.company, avg:o.sum/o.count, weeks:o.count}))
+        .sort((a,b)=>b.avg-a.avg);
+    }
+
+  } else {
+    const w = String(viewGlobal);
+    const list = [];
+    for(const c of COMPANIES){
+      const rec = bucket[makeKey(c, w)];
       if(!rec) continue;
 
       const pe = getParsedEmployeesFromRec(rec);
       const emps = asArray(pe.employees);
-
       emps.forEach(e=>{
-        if(!e?.name || e.name==="SIN NOMBRE") return;
-        if(!Array.isArray(e.rows) || e.rows.length===0) return;
-
-        const key = e.name + "||" + c;
-        if(!globalBlocks.has(key)) globalBlocks.set(key, {name:e.name, company:c, blocks:[]});
-        globalBlocks.get(key).blocks.push({week:w, rows:e.rows});
+        if(e?.calif==null || !isFinite(e.calif)) return;
+        list.push({name:e.name, company:c, avg:e.calif, weeks:1});
       });
     }
+    globalRank = list.sort((a,b)=>b.avg-a.avg);
   }
-
-  globalRank = [...globalBlocks.values()]
-    .map(o=>{
-      const r = aggregateEmployeeMonthScore(o.blocks);
-      return {name:o.name, company:o.company, avg:r.score, weeks:r.weeks};
-    })
-    .sort((a,b)=>(b.avg??-1)-(a.avg??-1));
-
-} else {
-  const w = String(viewGlobal);
-  const list = [];
-
-  for(const c of COMPANIES){
-    const rec = bucket[makeKey(c, w)];
-    if(!rec) continue;
-
-    const pe = getParsedEmployeesFromRec(rec);
-    const emps = asArray(pe.employees);
-
-    emps.forEach(e=>{
-      if(e?.calif==null || !isFinite(e.calif)) return;
-      list.push({name:e.name, company:c, avg:e.calif, weeks:1});
-    });
-  }
-
-  globalRank = list.sort((a,b)=>b.avg-a.avg);
-}
 
   globalRank.forEach((r,i)=>{
     const tr=document.createElement("tr");
@@ -1521,7 +1544,7 @@ if(viewGlobal === "mes"){
     gBody.appendChild(tr);
   });
 
-  // 5) Mejor vendedor por empresa (mes)
+  // 5) Mejor vendedor por empresa (mes) - por promedio calif
   const bestBody = $("bestByCompany").querySelector("tbody");
   bestBody.innerHTML="";
   for(const c of COMPANIES){
@@ -1550,7 +1573,6 @@ if(viewGlobal === "mes"){
     bestBody.appendChild(tr);
   }
 
-  /* ✅ SOLO ESTA LLAMADA (NO TOCA TU LÓGICA) */
   renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany});
 
   if(!hasAny){
@@ -1649,3 +1671,4 @@ function showTab(name){
 </script>
 </body>
 </html>
+
