@@ -264,7 +264,7 @@
               <h2 style="font-size:14px;margin:0">Gráfica 1 · Ranking empresas (KPI% mes)</h2>
               <span class="small">Mayor a menor</span>
             </div>
-            <p class="hint" style="margin-top:6px">KPI mensual ponderado por concepto (cap 100% por concepto).</p>
+            <p class="hint" style="margin-top:6px">KPI mensual ponderado (igual al sistema).</p>
             <div class="chartWrap" style="margin-top:10px">
               <canvas id="chartRankingKPI"></canvas>
             </div>
@@ -328,7 +328,7 @@
         </details>
       </div>
 
-      <!-- Desglose del mes (matriz) para empresa seleccionada -->
+      <!-- Desglose del mes (matriz) -->
       <div class="card" style="padding:14px;margin-top:12px">
         <details id="companyMatrixDetails">
           <summary style="cursor:pointer;font-weight:900">Desglose del mes (matriz)</summary>
@@ -377,7 +377,7 @@
           <div style="margin-top:10px;max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:12px">
             <table id="resEmpRank">
               <thead>
-                <tr><th>#</th><th>Empleado</th><th class="right">Score%</th><th class="right">Semanas</th></tr>
+                <tr><th>#</th><th>Empleado</th><th class="right">Ponderado%</th><th class="right">Semanas</th></tr>
               </thead>
               <tbody></tbody>
             </table>
@@ -423,7 +423,7 @@
           <div style="margin-top:10px;max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:12px">
             <table id="globalRank">
               <thead>
-                <tr><th>#</th><th>Empleado</th><th>Empresa</th><th class="right">Score%</th><th class="right">Semanas</th></tr>
+                <tr><th>#</th><th>Empleado</th><th>Empresa</th><th class="right">Ponderado%</th><th class="right">Semanas</th></tr>
               </thead>
               <tbody></tbody>
             </table>
@@ -432,11 +432,11 @@
       </div>
 
       <div class="card" style="padding:14px;margin-top:12px">
-        <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Mejor vendedor por empresa (mes ponderado)</h2></div>
+        <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Mejor vendedor por empresa (mes)</h2></div>
         <div style="margin-top:10px;max-height:360px;overflow:auto;border:1px solid var(--border);border-radius:12px">
           <table id="bestByCompany">
             <thead>
-              <tr><th>Empresa</th><th>Empleado</th><th class="right">Score%</th><th class="right">Semanas</th></tr>
+              <tr><th>Empresa</th><th>Empleado</th><th class="right">Promedio%</th><th class="right">Semanas</th></tr>
             </thead>
             <tbody></tbody>
           </table>
@@ -511,7 +511,7 @@ const CFG_KEY = "herrera_cfg_v1";
 function $(id){ return document.getElementById(id); }
 function fmtPct(n){
   if(n==null || !isFinite(n)) return "—";
-  return n.toFixed(2) + "%";
+  return Number(n).toFixed(2) + "%";
 }
 function safeNum(s){
   if(s==null) return null;
@@ -520,11 +520,20 @@ function safeNum(s){
   const n = Number(t);
   return isFinite(n) ? n : null;
 }
-function normalizeLine(s){
-  return String(s).replace(/\u00a0/g," ").trim();
-}
-const asArray = (x)=> Array.isArray(x) ? x : [];
 function cap01(x){ return Math.max(0, Math.min(1, x)); }
+
+// ✅ NO aplastar espacios
+function normalizeLine(s){
+  return String(s).replace(/\u00a0/g," ").trimEnd();
+}
+
+// ✅ Split robusto: tabs o columnas con 2+ espacios
+function splitCols(line){
+  return String(line).trim()
+    .split(/\t+| {2,}/g)
+    .map(x=>x.trim())
+    .filter(Boolean);
+}
 
 /** ==============================
  *  Modelo de datos guardado
@@ -547,34 +556,23 @@ function getBucket(data, year, month){
 function makeKey(company, week){ return company + "||" + week; }
 
 /** ==============================
- *  ✅ KPI PONDERADO (Empresa)
- *  KPI = Σ pesoPct * min(obt/meta, 1)
- *  Si pesos no suman 100 -> normaliza a 100.
- *  ============================== */
-function weightedKpiFromRows(rows){
-  const valid = rows.filter(r => r && r.meta!=null && r.obtained!=null && r.weightPct!=null && isFinite(r.weightPct) && r.weightPct>0);
-  if(valid.length===0) return null;
-
-  const sumW = valid.reduce((s,r)=>s + (r.weightPct||0), 0);
-  if(!sumW) return null;
-
-  let score = 0;
-  for(const r of valid){
-    const ratio = (r.meta>0) ? cap01(r.obtained / r.meta) : 0;
-    score += (r.weightPct / sumW) * ratio * 100;
-  }
-  return score;
-}
-
-/** ==============================
- *  Parser Empresa (TABLA REAL)
- *  Espera columnas:
- *  Conceptos | Meta | Obtenido | Obtenido% | Meta(=Peso) | Avance
+ *  Parser Empresa (CORREGIDO)
+ *  - soporta tabs o espacios
+ *  - lee columnas reales (evita bug de "9.1 (70%)")
+ *  - guarda weightPct (col "Meta" peso)
+ *  - KPI footer: primer % de la línea final
  *  ============================== */
 function parseCompanyPaste(text){
   const warnings=[], errors=[];
-  const rawLines = String(text||"").split(/\r?\n/).map(normalizeLine).filter(Boolean);
-  if(rawLines.length===0) return {rows:[], totals:{kpi:null, kpiReported:null, kpiCalc:null}, warnings, errors:["Pegado de empresa vacío."]};
+  const rawLines = String(text||"")
+    .split(/\r?\n/)
+    .map(normalizeLine)
+    .map(l=>l.replace(/\s+$/g,""))
+    .filter(l=>l.trim().length>0);
+
+  if(rawLines.length===0){
+    return {rows:[], totals:{kpi:null,kpiReported:null,kpiCalcWeighted:null}, warnings, errors:["Pegado de empresa vacío."]};
+  }
 
   let startIdx = rawLines.findIndex(l=>{
     const x=l.toLowerCase();
@@ -587,7 +585,8 @@ function parseCompanyPaste(text){
   let kpiReported=null;
 
   for(let i=startIdx;i<rawLines.length;i++){
-    const line = rawLines[i];
+    const line = rawLines[i].trim();
+    if(!line) continue;
 
     // footer tipo: "80.93% 100% - -"
     const footer = line.match(/^\s*([0-9]+(?:\.[0-9]+)?)\s*%\s+/);
@@ -596,71 +595,64 @@ function parseCompanyPaste(text){
       continue;
     }
 
-    // Preferencia: tabs (pegado real)
-    if(line.includes("\t")){
-      const cols = line.split("\t").map(x=>x.trim()).filter(x=>x.length>0);
-      if(cols.length < 4) continue;
+    const cols = splitCols(line);
+    if(cols.length < 3) continue;
 
-      const concept = cols[0];
-      // debe tener letras (evita basura)
-      if(!/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(concept)) continue;
+    const first = (cols[0]||"").toLowerCase();
+    if(first==="conceptos" || first==="concepto") continue;
 
-      const meta = safeNum(cols[1]);
-      const obtained = safeNum(cols[2]);
+    // concepto
+    const concept = cols[0];
+    if(!concept || /^\d+(\.\d+)?$/.test(concept)) continue;
 
-      // peso: normalmente está en col 4 (index 4) si hay 6 cols.
-      // si falta "Obtenido%" puede correrse, entonces tomamos "penúltima" como peso y "última" como avance.
-      const weightRaw = cols.length >= 2 ? cols[cols.length-2] : null;
-      const avanceRaw = cols.length >= 1 ? cols[cols.length-1] : null;
+    // meta (puede venir con nota: "9.1 (70%)")
+    const metaRaw = cols[1];
+    const meta = safeNum(metaRaw);
+    const noteMatch = String(metaRaw||"").match(/\([^)]+\)/);
+    const metaNote = noteMatch ? noteMatch[0] : null;
 
-      const weightPct = safeNum(weightRaw);
-      const avance = safeNum(avanceRaw);
+    // obtenido
+    const obtained = safeNum(cols[2]);
 
-      // nota meta tipo "(70%)"
-      const metaNoteMatch = String(cols[1]||"").match(/\([^)]+\)/);
-      const metaNote = metaNoteMatch ? metaNoteMatch[0] : null;
+    // peso%: normalmente es col 5 (index 4) si hay 6 columnas
+    let weightPct = null;
+    if(cols.length >= 6) weightPct = safeNum(cols[4]);
+    else if(cols.length === 5) weightPct = safeNum(cols[3]); // fallback
 
-      rows.push({concept, meta, obtained, weightPct, avance, metaNote});
-      continue;
-    }
+    // avance%: última columna
+    const avance = safeNum(cols[cols.length-1]);
 
-    // fallback (si viene sin tabs): intenta extraer
-    const conceptMatch = line.match(/^\s*([A-Za-zÁÉÍÓÚÑáéíóúñ][^0-9]*)\s+/);
-    if(!conceptMatch) continue;
-    const concept = conceptMatch[1].trim();
-    if(!concept || !/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(concept)) continue;
-
-    const after = line.slice(conceptMatch[0].length);
-    const nums = after.match(/[0-9]+(?:\.[0-9]+)?/g) || [];
-    const meta = nums.length>=1 ? safeNum(nums[0]) : null;
-    const obtained = nums.length>=2 ? safeNum(nums[1]) : null;
-
-    const percs = line.match(/[0-9]+(?:\.[0-9]+)?\s*%/g) || [];
-    const avance = percs.length ? safeNum(percs[percs.length-1]) : null;
-    const weightPct = (percs.length>=2) ? safeNum(percs[percs.length-2]) : null;
-
-    rows.push({concept, meta, obtained, weightPct, avance, metaNote:null});
+    rows.push({concept, meta, obtained, avance, metaNote, weightPct});
   }
 
   if(rows.length===0) errors.push("No detecté filas de conceptos. Revisa el pegado.");
 
-  // KPI calculado PONDERADO
-  const kpiCalc = weightedKpiFromRows(rows);
-  const kpi = (kpiReported!=null && isFinite(kpiReported)) ? kpiReported : kpiCalc;
+  // KPI ponderado calculado (igual al sistema): sum(weight * min(obt/meta,1))
+  const kpiCalcWeighted = rows.reduce((sum,r)=>{
+    const w = (r.weightPct!=null && isFinite(r.weightPct)) ? r.weightPct : 0;
+    const ratio = (r.meta && r.meta>0) ? (r.obtained/r.meta) : 0;
+    return sum + (w * cap01(ratio));
+  },0);
 
+  const kpi = (kpiReported!=null && isFinite(kpiReported)) ? kpiReported : (rows.length? kpiCalcWeighted : null);
   if(kpiReported==null) warnings.push("No detecté KPI reportado (footer). Usaré KPI ponderado calculado.");
-  if(kpiCalc==null) warnings.push("No pude calcular KPI ponderado (faltan pesos o metas).");
 
-  return { rows, totals:{kpi, kpiCalc, kpiReported}, warnings, errors };
+  return { rows, totals:{kpi, kpiReported, kpiCalcWeighted}, warnings, errors };
 }
 
 /** ==============================
- *  Parser Empleados
- *  - Ignora filas “concepto” sin letras (ej: "0 2 0")
+ *  Parser Empleados (CORREGIDO)
+ *  - soporta tabs o espacios alineados
+ *  - ignora renglones raros (ej: "0 2 0 ...")
  *  ============================== */
 function parseEmployeesPaste(text){
   const warnings=[], errors=[];
-  const lines = String(text||"").split(/\r?\n/).map(normalizeLine).filter(Boolean);
+  const lines = String(text||"")
+    .split(/\r?\n/)
+    .map(normalizeLine)
+    .map(l=>l.trim())
+    .filter(Boolean);
+
   if(lines.length===0) return {employees:[], warnings, errors:["Pegado de empleados vacío."]};
 
   const starts=[];
@@ -703,24 +695,22 @@ function parseEmployeesPaste(text){
     if(headerIdx !== -1){
       for(let i=headerIdx+1;i<block.length;i++){
         const l = block[i];
-
         if(/^citas\b/i.test(l)) break;
         if(/^total\b/i.test(l)) break;
 
-        if(!l.includes("\t")) continue;
+        // si empieza con números (ej: "0 2 0 ...") lo ignoramos
+        if(/^\d+(\s+\d+)+/.test(l)) continue;
 
-        const cols = l.split("\t").map(x=>x.trim()).filter(Boolean);
+        const cols = splitCols(l);
         if(cols.length < 4) continue;
 
         const concept = cols[0];
-        // ✅ evita línea basura (no tiene letras)
-        if(!/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(concept)) continue;
+        if(!concept || /^\d+(\.\d+)?$/.test(concept)) continue;
 
         const obtained = safeNum(cols[1]);
         const meta = safeNum(cols[2]);
-        const pesoPct = safeNum(cols[3]); // viene como 6.7% o 6.7
+        const pesoPct = safeNum(cols[3]); // columna "%"
 
-        if(!concept) continue;
         rows.push({concept, obtained, meta, pesoPct});
       }
     }
@@ -733,6 +723,7 @@ function parseEmployeesPaste(text){
 
   return { employees, warnings, errors };
 }
+
 function topEmployees(employees, n=5){
   return [...employees]
     .filter(e=>e?.calif!=null && isFinite(e.calif))
@@ -809,8 +800,8 @@ function preview(){
   kpiWrap.innerHTML="";
   const boxes = [
     ["KPI usado", fmtPct(c.totals.kpi)],
-    ["KPI calc (ponderado)", fmtPct(c.totals.kpiCalc)],
-    ["Filas", String(c.rows.length)]
+    ["KPI calc (ponderado)", fmtPct(c.totals.kpiCalcWeighted)],
+    ["Conceptos", String(c.rows.length)]
   ];
   boxes.forEach(([t,v])=>{
     const d=document.createElement("div");
@@ -980,9 +971,9 @@ function colorByEfficiency(pct){
   return "#dc2626";
 }
 
-function renderCharts({aggregateMonthlyCompanyKpi, employeeEfficiencyByCompany}){
+function renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany}){
   const rankData = COMPANIES.map(c=>{
-    const kpi = aggregateMonthlyCompanyKpi(c).kpiMonth;
+    const kpi = aggregateMonthlyConcepts(c).kpiMonth;
     return {company:c, value:(kpi!=null && isFinite(kpi))?kpi:0, has:(kpi!=null && isFinite(kpi))};
   }).sort((a,b)=>b.value-a.value);
 
@@ -1048,22 +1039,17 @@ function renderCharts({aggregateMonthlyCompanyKpi, employeeEfficiencyByCompany})
 }
 
 /** ==============================
- *  ✅ SCORE PONDERADO EMPLEADOS (MES)
- *  Score = Σ pesoPct * min(obt/meta,1)  (normalizando pesos)
+ *  Helpers de Resultados
  *  ============================== */
-function computeWeightedScoreFromConceptSums(concepts){
-  const valid = concepts.filter(c => c && c.pesoPct!=null && isFinite(c.pesoPct) && c.pesoPct>0 && c.metaSum!=null && isFinite(c.metaSum));
-  if(valid.length===0) return null;
+const asArray = (x)=> Array.isArray(x) ? x : [];
 
-  const sumW = valid.reduce((s,c)=>s + (c.pesoPct||0), 0);
-  if(!sumW) return null;
-
-  let score = 0;
-  for(const c of valid){
-    const ratio = (c.metaSum && c.metaSum>0) ? cap01(c.obtainedSum/c.metaSum) : 0;
-    score += (c.pesoPct/sumW) * ratio * 100;
-  }
-  return score;
+function computeScoreFromConceptSums(concepts){
+  // concepts: [{metaSum, obtainedSum, pesoPct}]
+  return concepts.reduce((s,c)=>{
+    const w = (c.pesoPct!=null && isFinite(c.pesoPct)) ? c.pesoPct : 0;
+    const ratio = (c.metaSum && c.metaSum>0) ? (c.obtainedSum/c.metaSum) : 0;
+    return s + (w * cap01(ratio));
+  },0);
 }
 
 function aggregateEmployeeMonthScore(blocks){
@@ -1075,7 +1061,6 @@ function aggregateEmployeeMonthScore(blocks){
     for(const r of (b.rows||[])){
       const key = r.concept;
       if(!key) continue;
-      if(!/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(key)) continue; // seguridad extra
 
       if(!map.has(key)){
         map.set(key, {concept:key, metaSum:0, obtainedSum:0, pesoPct: (r.pesoPct!=null? r.pesoPct : null)});
@@ -1083,18 +1068,16 @@ function aggregateEmployeeMonthScore(blocks){
       const o = map.get(key);
       o.metaSum += (r.meta||0);
       o.obtainedSum += (r.obtained||0);
-      if((o.pesoPct==null || !isFinite(o.pesoPct)) && r.pesoPct!=null) o.pesoPct = r.pesoPct;
+      if(o.pesoPct==null && r.pesoPct!=null) o.pesoPct = r.pesoPct;
     }
   }
 
   const concepts = [...map.values()];
-  const score = computeWeightedScoreFromConceptSums(concepts);
+  const score = computeScoreFromConceptSums(concepts);
   return {score, weeks: weeksSet.size, concepts};
 }
 
-/** ==============================
- *  Re-parse desde texto si faltan parsed (compat)
- *  ============================== */
+// ✅ Re-parse si rows quedaron vacías
 function getParsedCompanyFromRec(rec){
   const parsed = rec?.parsedCompany;
   if(parsed && Array.isArray(parsed.rows) && parsed.rows.length>0) return parsed;
@@ -1108,15 +1091,7 @@ function getParsedEmployeesFromRec(rec){
   return parseEmployeesPaste(text);
 }
 
-/** ==============================
- *  Matriz (empresa)
- *  - Mes por concepto: suma metas/obtenidos
- *  - Avance por concepto del mes: (sumObt/sumMeta)*100 (sin cap aquí, solo tabla)
- *  - Avance General: KPI semanal guardado (promedio simple) SOLO PARA MOSTRAR
- *    (pero KPI MES real se calcula ponderado en comparativos)
- *  ============================== */
 function buildWeeklyMatrixHTML(companyName, bucket){
-  const conceptsOrder = ["Afluencia","Citas","Avaluos","Avalúos","Demos","Solicitudes","Aprobados","Ventas","Entregas"];
   const conceptMap = new Map();
 
   function normConcept(c){
@@ -1125,7 +1100,6 @@ function buildWeeklyMatrixHTML(companyName, bucket){
       .replace(/á/g,"a").replace(/é/g,"e").replace(/í/g,"i").replace(/ó/g,"o").replace(/ú/g,"u");
   }
 
-  const weeks = [];
   const weekKpis = [];
   for(let w=1; w<=5; w++){
     const rec = bucket[makeKey(companyName, String(w))];
@@ -1137,17 +1111,17 @@ function buildWeeklyMatrixHTML(companyName, bucket){
     const kpi = pc?.totals?.kpi ?? null;
     if(kpi!=null && isFinite(kpi)) weekKpis.push({w, kpi});
 
-    weeks.push({w, rows});
     for(const r of rows){
       const key = normConcept(r.concept);
       if(!key) continue;
       if(!conceptMap.has(key)){
-        conceptMap.set(key, {label:r.concept, weeks:{}, metaMonth:0, obtMonth:0});
+        conceptMap.set(key, {label:r.concept, weeks:{}, metaMonth:0, obtMonth:0, weightPct:null});
       }
       const obj = conceptMap.get(key);
       obj.weeks[w] = {meta:r.meta??null, obt:r.obtained??null, av:r.avance??null, note:r.metaNote||null};
       obj.metaMonth += (r.meta||0);
       obj.obtMonth += (r.obtained||0);
+      if(obj.weightPct==null && r.weightPct!=null) obj.weightPct = r.weightPct;
     }
   }
 
@@ -1155,18 +1129,15 @@ function buildWeeklyMatrixHTML(companyName, bucket){
     return `<div class="msg warn">Sin datos para construir matriz (no se detectaron conceptos).</div>`;
   }
 
-  const keys = [...conceptMap.keys()];
-  keys.sort((a,b)=>{
-    const ia = conceptsOrder.map(normConcept).indexOf(a);
-    const ib = conceptsOrder.map(normConcept).indexOf(b);
-    const aa = ia===-1 ? 999 : ia;
-    const bb = ib===-1 ? 999 : ib;
-    if(aa!==bb) return aa-bb;
-    return (conceptMap.get(a).label||"").localeCompare(conceptMap.get(b).label||"");
-  });
-
   const weekCols = [1,2,3,4,5];
-  const avgWeekKpi = weekKpis.length ? (weekKpis.reduce((s,x)=>s+x.kpi,0)/weekKpis.length) : null;
+  const keys = [...conceptMap.keys()].sort((a,b)=> (conceptMap.get(a).label||"").localeCompare(conceptMap.get(b).label||""));
+
+  // KPI mes ponderado (igual al sistema)
+  const kpiMonth = [...conceptMap.values()].reduce((sum,c)=>{
+    const w = (c.weightPct!=null && isFinite(c.weightPct)) ? c.weightPct : 0;
+    const ratio = (c.metaMonth>0) ? (c.obtMonth/c.metaMonth) : 0;
+    return sum + (w * cap01(ratio));
+  },0);
 
   const headWeek = (w)=>`<th colspan="3" class="right">Semana ${w}</th>`;
   const subHead = (label)=>`<th class="right">${label}</th>`;
@@ -1180,7 +1151,11 @@ function buildWeeklyMatrixHTML(companyName, bucket){
       const meta = cell.meta==null ? "—" : (Number(cell.meta).toFixed(2) + (cell.note?(" "+cell.note):""));
       const obt  = cell.obt==null ? "—" : Number(cell.obt).toFixed(2);
       const av   = cell.av==null ? "—" : Number(cell.av).toFixed(2)+"%";
-      return `<td class="num">${meta}</td><td class="num">${obt}</td><td class="num">${av}</td>`;
+      return `
+        <td class="num">${meta}</td>
+        <td class="num">${obt}</td>
+        <td class="num">${av}</td>
+      `;
     }).join("");
 
     return `
@@ -1196,13 +1171,13 @@ function buildWeeklyMatrixHTML(companyName, bucket){
 
   const advanceRow = `
     <tr>
-      <td><b>Avance General (KPI semanal)</b></td>
+      <td><b>Avance General</b></td>
       ${weekCols.map(w=>{
         const wk = weekKpis.find(x=>x.w===w);
         const v = wk ? wk.kpi.toFixed(2)+"%" : "—";
         return `<td class="num" colspan="3"><b>${v}</b></td>`;
       }).join("")}
-      <td class="num" colspan="3"><b>${avgWeekKpi==null ? "—" : avgWeekKpi.toFixed(2)+"%"}</b></td>
+      <td class="num" colspan="3"><b>${isFinite(kpiMonth) ? kpiMonth.toFixed(2)+"%" : "—"}</b></td>
     </tr>
   `;
 
@@ -1227,7 +1202,7 @@ function buildWeeklyMatrixHTML(companyName, bucket){
         </tbody>
       </table>
     </div>
-    <p class="hint" style="margin-top:8px">Nota: KPI MES (comparativos/rankings) se calcula ponderado por concepto (cap 100%). La fila “Avance General” es solo KPI semanal guardado, para referencia visual.</p>
+    <p class="hint" style="margin-top:8px">El KPI mensual es ponderado (igual al sistema): suma de (Peso × min(Obtenido/Meta, 1)).</p>
   `;
 }
 
@@ -1242,8 +1217,11 @@ function buildResults(){
   const data = loadData();
   const bucket = (((data||{})[year]||{})[month]||{});
 
-  /** KPI mensual empresa (PONDERADO) */
-  function aggregateMonthlyCompanyKpi(companyName){
+  // 0) Comparativo mensual
+  const monthlyTbody = $("cmpMonthly").querySelector("tbody");
+  monthlyTbody.innerHTML="";
+
+  function aggregateMonthlyConcepts(companyName){
     const map = new Map(); // concept -> {metaSum, obtainedSum, weightPct}
     let weeksUsed=0;
 
@@ -1258,37 +1236,33 @@ function buildResults(){
       weeksUsed++;
 
       rows.forEach(r=>{
-        const key = r.concept;
+        const key=r.concept;
         if(!key) return;
 
-        if(!map.has(key)) map.set(key, {concept:key, metaSum:0, obtainedSum:0, weightPct: r.weightPct ?? null});
+        if(!map.has(key)) map.set(key, {metaSum:0, obtainedSum:0, weightPct:(r.weightPct!=null?r.weightPct:null), metaNote:r.metaNote||null});
         const o=map.get(key);
+
         o.metaSum += (r.meta||0);
         o.obtainedSum += (r.obtained||0);
-        if((o.weightPct==null || !isFinite(o.weightPct)) && r.weightPct!=null) o.weightPct = r.weightPct;
+        if(o.weightPct==null && r.weightPct!=null) o.weightPct = r.weightPct;
+        if(r.metaNote) o.metaNote = r.metaNote;
       });
     }
 
-    const concepts = [...map.values()];
-    // KPI mes = ponderado por concepto, cap 100% por concepto (ratio cap01)
-    let kpiMonth = null;
-    const valid = concepts.filter(c=>c.weightPct!=null && isFinite(c.weightPct) && c.weightPct>0 && c.metaSum!=null && isFinite(c.metaSum));
-    if(valid.length){
-      const sumW = valid.reduce((s,c)=>s+(c.weightPct||0),0);
-      if(sumW){
-        let score=0;
-        for(const c of valid){
-          const ratio = (c.metaSum>0) ? cap01(c.obtainedSum/c.metaSum) : 0;
-          score += (c.weightPct/sumW) * ratio * 100;
-        }
-        kpiMonth = score;
-      }
-    }
+    const concepts = [...map.entries()].map(([concept,o])=>{
+      const avance = o.metaSum>0 ? (o.obtainedSum/o.metaSum)*100 : null;
+      return {concept, meta:o.metaSum, obtained:o.obtainedSum, avance, metaNote:o.metaNote, weightPct:o.weightPct};
+    });
 
-    return {concepts, weeksUsed, kpiMonth};
+    const kpiMonth = concepts.reduce((sum,c)=>{
+      const w = (c.weightPct!=null && isFinite(c.weightPct)) ? c.weightPct : 0;
+      const ratio = (c.meta && c.meta>0) ? (c.obtained/c.meta) : 0;
+      return sum + (w * cap01(ratio));
+    },0);
+
+    return {rows:concepts, weeksUsed, kpiMonth};
   }
 
-  /** promedio simple de % empleados (solo para gráfica 2) */
   function employeeEfficiencyByCompany(companyName){
     let sum=0, count=0;
     for(let w=1; w<=5; w++){
@@ -1306,13 +1280,9 @@ function buildResults(){
     return {avg, count};
   }
 
-  // 0) Comparativo mensual
-  const monthlyTbody = $("cmpMonthly").querySelector("tbody");
-  monthlyTbody.innerHTML="";
-
   const monthlyRows = COMPANIES
     .map(c => {
-      const agg = aggregateMonthlyCompanyKpi(c);
+      const agg = aggregateMonthlyConcepts(c);
       return { company: c, kpi: agg.kpiMonth, weeks: agg.weeksUsed };
     })
     .sort((a, b) => (b.kpi ?? -1) - (a.kpi ?? -1));
@@ -1334,13 +1304,12 @@ function buildResults(){
     monthlyTbody.appendChild(tr);
   });
 
-  // ✅ Matriz del mes (empresa seleccionada)
+  // Matriz empresa seleccionada
   $("companyMatrixBox").innerHTML = buildWeeklyMatrixHTML(company, bucket);
 
   // 1) Empresa por semanas
   const weeksTbody = $("resWeeksTable").querySelector("tbody");
   weeksTbody.innerHTML="";
-  const weekKpis=[];
   let hasAny=false;
 
   for(let w=1; w<=5; w++){
@@ -1353,8 +1322,6 @@ function buildResults(){
 
     if(rows.length===0 && (kpi==null || !isFinite(kpi))) continue;
     hasAny=true;
-
-    if(kpi!=null && isFinite(kpi)) weekKpis.push(kpi);
 
     const desgloseHTML = rows.length ? `
       <details>
@@ -1399,8 +1366,8 @@ function buildResults(){
     weeksTbody.appendChild(tr);
   }
 
-  const avgKpiWeeks = weekKpis.length ? (weekKpis.reduce((a,b)=>a+b,0)/weekKpis.length) : null;
-  $("resCompanyKpi").textContent = hasAny ? ("Promedio KPI semanas (referencia): " + fmtPct(avgKpiWeeks)) : "";
+  const companyMonthKpi = (aggregateMonthlyConcepts(company).kpiMonth);
+  $("resCompanyKpi").textContent = hasAny ? ("KPI mes (ponderado): " + fmtPct(companyMonthKpi)) : "";
 
   // 2) Ranking empleados (empresa) Mes/Semana
   const viewEmp = $("empWeekView") ? $("empWeekView").value : "mes";
@@ -1429,7 +1396,6 @@ function buildResults(){
         const r = aggregateEmployeeMonthScore(blocks);
         return { name, avg: r.score, weeks: r.weeks };
       })
-      .filter(x=>x.avg!=null && isFinite(x.avg))
       .sort((a,b)=>(b.avg??-1)-(a.avg??-1));
 
   }else{
@@ -1515,7 +1481,6 @@ function buildResults(){
         const r = aggregateEmployeeMonthScore(o.blocks);
         return {name:o.name, company:o.company, avg:r.score, weeks:r.weeks};
       })
-      .filter(x=>x.avg!=null && isFinite(x.avg))
       .sort((a,b)=>(b.avg??-1)-(a.avg??-1));
 
   } else {
@@ -1544,47 +1509,36 @@ function buildResults(){
     gBody.appendChild(tr);
   });
 
-  // 5) Mejor vendedor por empresa (MES PONDERADO)
+  // 5) Mejor vendedor por empresa (mes) (mantenemos como promedio simple de calif semanal, porque es "calificación cerrada")
   const bestBody = $("bestByCompany").querySelector("tbody");
   bestBody.innerHTML="";
-
   for(const c of COMPANIES){
-    const blocksByName = new Map(); // name -> [{week, rows}]
+    const map = new Map();
     for(let w=1; w<=5; w++){
       const rec = bucket[makeKey(c, String(w))];
       if(!rec) continue;
-
       const pe = getParsedEmployeesFromRec(rec);
       const emps = asArray(pe.employees);
-
       emps.forEach(e=>{
-        if(!e?.name || e.name==="SIN NOMBRE") return;
-        if(!Array.isArray(e.rows) || e.rows.length===0) return;
-
-        if(!blocksByName.has(e.name)) blocksByName.set(e.name, []);
-        blocksByName.get(e.name).push({week:w, rows:e.rows});
+        if(e?.calif==null || !isFinite(e.calif)) return;
+        if(!map.has(e.name)) map.set(e.name, {sum:0,count:0});
+        const o = map.get(e.name);
+        o.sum += e.calif; o.count += 1;
       });
     }
-
-    const scored = [...blocksByName.entries()]
-      .map(([name, blocks])=>{
-        const r = aggregateEmployeeMonthScore(blocks);
-        return {name, score:r.score, weeks:r.weeks};
-      })
-      .filter(x=>x.score!=null && isFinite(x.score))
-      .sort((a,b)=>b.score-a.score);
+    const arr = [...map.entries()].map(([name,o])=>({name, avg:o.sum/o.count, weeks:o.count}))
+      .sort((a,b)=>b.avg-a.avg);
 
     const tr=document.createElement("tr");
-    if(scored.length===0){
+    if(arr.length===0){
       tr.innerHTML = `<td>${c}</td><td>—</td><td class="num">—</td><td class="num">0</td>`;
     }else{
-      tr.innerHTML = `<td>${c}</td><td>${scored[0].name}</td><td class="num">${fmtPct(scored[0].score)}</td><td class="num">${scored[0].weeks}</td>`;
+      tr.innerHTML = `<td>${c}</td><td>${arr[0].name}</td><td class="num">${fmtPct(arr[0].avg)}</td><td class="num">${arr[0].weeks}</td>`;
     }
     bestBody.appendChild(tr);
   }
 
-  // ✅ Charts
-  renderCharts({aggregateMonthlyCompanyKpi, employeeEfficiencyByCompany});
+  renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany});
 
   if(!hasAny){
     setMsg($("resMsg"), "No hay datos guardados para esa empresa/mes. Ve a Datos y guarda semanas.", "warn");
@@ -1682,5 +1636,6 @@ function showTab(name){
 </script>
 </body>
 </html>
+
 
   
