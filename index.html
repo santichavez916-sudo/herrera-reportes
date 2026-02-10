@@ -549,7 +549,10 @@ function getBucket(data, year, month){
 function makeKey(company, week){ return company + "||" + week; }
 
 /** ==============================
- *  Parser Empresa (ROBUSTO)
+ *  Parser Empresa (ROBUSTO + FIX nan/(70%))
+ *  - NO toma números dentro de paréntesis como "Obtenido"
+ *  - Avance toma el último token de % (incluyendo nan%)
+ *  - líneas tipo "- -" se consideran footer y NO suman
  *  ============================== */
 function parseCompanyPaste(text){
   const warnings=[], errors=[];
@@ -569,34 +572,46 @@ function parseCompanyPaste(text){
   for(let i=startIdx;i<rawLines.length;i++){
     const line = rawLines[i];
 
-    const footer = line.match(/^\s*([0-9]+(?:\.[0-9]+)?)\s*%\s+/);
-    if(footer && line.includes("-")){
-      kpiReported = Number(footer[1]);
+    // ✅ Footer (casi siempre trae "- -")
+    if(/-\s*-/.test(line)){
+      // si hay un KPI numérico tipo "50.79%"
+      const m = line.match(/([0-9]+(?:\.[0-9]+)?)\s*%/);
+      if(m) kpiReported = Number(m[1]);
       continue;
     }
 
+    // concepto = texto al inicio hasta antes del primer número
     const conceptMatch = line.match(/^\s*([A-Za-zÁÉÍÓÚÑáéíóúñ][^0-9]*)\s+/);
     if(!conceptMatch) continue;
     const concept = conceptMatch[1].trim();
     if(!concept) continue;
 
     const afterConcept = line.slice(conceptMatch[0].length);
+
+    // meta + nota opcional (ej: "0.0 (70%)")
     const metaMatch = afterConcept.match(/^([0-9]+(?:\.[0-9]+)?)\s*(\([^)]+\))?/);
     const meta = metaMatch ? safeNum(metaMatch[1]) : null;
     const metaNote = metaMatch && metaMatch[2] ? metaMatch[2].trim() : null;
 
-    const nums = afterConcept.match(/[0-9]+(?:\.[0-9]+)?/g) || [];
-    const metaFromNums = nums.length>=1 ? safeNum(nums[0]) : meta;
-    const obtained = nums.length>=2 ? safeNum(nums[1]) : null;
+    // ✅ obtenido = PRIMER número DESPUÉS del metaMatch (para ignorar el 70% dentro de paréntesis)
+    let obtained = null;
+    const rest = metaMatch ? afterConcept.slice(metaMatch[0].length) : afterConcept;
+    const obtMatch = rest.match(/([0-9]+(?:\.[0-9]+)?)/);
+    if(obtMatch) obtained = safeNum(obtMatch[1]);
 
-    const percents = line.match(/[0-9]+(?:\.[0-9]+)?\s*%/g) || [];
+    // ✅ avance = último token de % (acepta "nan%")
     let avance = null;
-    if(percents.length){
-      const last = percents[percents.length-1];
-      avance = safeNum(last);
+    const pctTokens = line.match(/(?:nan|[0-9]+(?:\.[0-9]+)?)\s*%/gi) || [];
+    if(pctTokens.length){
+      const last = pctTokens[pctTokens.length-1].trim();
+      if(/^nan/i.test(last)) avance = null;
+      else avance = safeNum(last);
     }
 
-    rows.push({concept, meta: metaFromNums ?? meta, obtained, avance, metaNote});
+    // evita filas basura tipo "nan%" como concepto (por si no venía con "- -")
+    if(/^nan\s*%?$/i.test(concept)) continue;
+
+    rows.push({concept, meta, obtained, avance, metaNote});
   }
 
   if(rows.length===0) errors.push("No detecté filas de conceptos. Revisa el pegado.");
@@ -604,8 +619,10 @@ function parseCompanyPaste(text){
   const metaSum = rows.reduce((a,r)=>a+(r.meta||0),0);
   const obtainedSum = rows.reduce((a,r)=>a+(r.obtained||0),0);
   const kpiCalc = metaSum>0 ? (obtainedSum/metaSum)*100 : null;
-  const kpi = (kpiReported!=null) ? kpiReported : kpiCalc;
-  if(kpiReported==null) warnings.push("No detecté KPI reportado (footer). Usaré KPI calculado.");
+
+  // si KPI reportado es número válido úsalo; si no, usa cálculo
+  const kpi = (kpiReported!=null && isFinite(kpiReported)) ? kpiReported : kpiCalc;
+  if(kpiReported==null || !isFinite(kpiReported)) warnings.push("No detecté KPI reportado válido (footer). Usaré KPI calculado (Obtenido/Meta).");
 
   return { rows, totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported}, warnings, errors };
 }
@@ -1287,7 +1304,7 @@ function buildResults(){
   htmlSel += `<div style="margin-top:10px">${buildWeeklyMatrixHTML(company, bucket)}</div>`;
   matrixBox.innerHTML = htmlSel;
 
-  // Empresa por semanas (igual)
+  // Empresa por semanas
   const weeksTbody = $("resWeeksTable").querySelector("tbody");
   weeksTbody.innerHTML="";
   const kpis=[];
@@ -1369,7 +1386,7 @@ function buildResults(){
         .map(e=>({name:e.name, avg:e.calif, weeks:1}))
         .sort((a,b)=>b.avg-a.avg);
     }else{
-      empRank = []; // sin mensual capturado
+      empRank = [];
     }
   }else{
     const rec = bucket[makeKey(company, String(viewEmp))];
@@ -1389,7 +1406,7 @@ function buildResults(){
   });
   $("resEmpCount").textContent = empRank.length ? (empRank.length + " empleados") : (viewEmp==="mes" ? "Sin mensual capturado" : "");
 
-  // Comparativo semanal (igual)
+  // Comparativo semanal
   const weekFilter = $("cmpWeekFilter") ? $("cmpWeekFilter").value : "all";
   const cmpBody = $("cmpWeekly").querySelector("tbody");
   cmpBody.innerHTML="";
@@ -1583,6 +1600,3 @@ function showTab(name){
 </script>
 </body>
 </html>
-
-
-  
