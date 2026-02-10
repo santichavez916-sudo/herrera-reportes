@@ -510,6 +510,9 @@ const COMPANIES = [
 const STORAGE_KEY = "herrera_reportes_v1";
 const CFG_KEY = "herrera_cfg_v1";
 
+// ✅ versión del parser (para re-parsear datos viejos sin que tengas que re-pegar)
+const PARSER_VER = 2;
+
 function $(id){ return document.getElementById(id); }
 function fmtPct(n){
   if(n==null || !isFinite(n)) return "—";
@@ -523,7 +526,7 @@ function safeNum(s){
   return isFinite(n) ? n : null;
 }
 
-// ✅ IMPORTANTE: ya NO aplastamos espacios (esto era el bug)
+// ✅ IMPORTANTE: NO aplastamos espacios (esto evita bugs con pegados)
 function normalizeLine(s){
   return String(s).replace(/\u00a0/g," ").trim();
 }
@@ -549,13 +552,19 @@ function getBucket(data, year, month){
 function makeKey(company, week){ return company + "||" + week; }
 
 /** ==============================
- *  Parser Empresa (ROBUSTO)
+ *  ✅ Parser Empresa (ROBUSTO, FIX NaN + (70%))
+ *  - Evita que (70%) se tome como "obtenido"
+ *  - Si el último porcentaje es nan%, avance=null
+ *  - KPI SIEMPRE se calcula por SUM(obtenido)/SUM(meta)
  *  ============================== */
 function parseCompanyPaste(text){
   const warnings=[], errors=[];
   const rawLines = String(text||"").split(/\r?\n/).map(normalizeLine).filter(Boolean);
-  if(rawLines.length===0) return {rows:[], totals:{metaSum:0,obtainedSum:0,kpi:null}, warnings, errors:["Pegado de empresa vacío."]};
+  if(rawLines.length===0) {
+    return { _v: PARSER_VER, rows:[], totals:{metaSum:0,obtainedSum:0,kpi:null}, warnings, errors:["Pegado de empresa vacío."]};
+  }
 
+  // detecta header
   let startIdx = rawLines.findIndex(l=>{
     const x=l.toLowerCase();
     return x.includes("concept") && x.includes("meta") && x.includes("obten");
@@ -569,45 +578,60 @@ function parseCompanyPaste(text){
   for(let i=startIdx;i<rawLines.length;i++){
     const line = rawLines[i];
 
+    // footer tipo: "50.79% 100% - -" (si empieza con número%)
     const footer = line.match(/^\s*([0-9]+(?:\.[0-9]+)?)\s*%\s+/);
     if(footer && line.includes("-")){
       kpiReported = Number(footer[1]);
       continue;
     }
 
+    // concepto = texto al inicio hasta que empiece número
     const conceptMatch = line.match(/^\s*([A-Za-zÁÉÍÓÚÑáéíóúñ][^0-9]*)\s+/);
     if(!conceptMatch) continue;
     const concept = conceptMatch[1].trim();
     if(!concept) continue;
 
     const afterConcept = line.slice(conceptMatch[0].length);
+
+    // meta puede venir con nota: "0.0 (70%)"
     const metaMatch = afterConcept.match(/^([0-9]+(?:\.[0-9]+)?)\s*(\([^)]+\))?/);
     const meta = metaMatch ? safeNum(metaMatch[1]) : null;
     const metaNote = metaMatch && metaMatch[2] ? metaMatch[2].trim() : null;
 
-    const nums = afterConcept.match(/[0-9]+(?:\.[0-9]+)?/g) || [];
-    const metaFromNums = nums.length>=1 ? safeNum(nums[0]) : meta;
-    const obtained = nums.length>=2 ? safeNum(nums[1]) : null;
-
-    const percents = line.match(/[0-9]+(?:\.[0-9]+)?\s*%/g) || [];
-    let avance = null;
-    if(percents.length){
-      const last = percents[percents.length-1];
-      avance = safeNum(last);
+    // ✅ OBTENIDO: primer número DESPUÉS de lo consumido (meta + nota)
+    let obtained = null;
+    if(metaMatch){
+      const rest = afterConcept.slice(metaMatch[0].length).trim();
+      const obtMatch = rest.match(/([0-9]+(?:\.[0-9]+)?)/);
+      obtained = obtMatch ? safeNum(obtMatch[1]) : null;
     }
 
-    rows.push({concept, meta: metaFromNums ?? meta, obtained, avance, metaNote});
+    // ✅ AVANCE: toma el ÚLTIMO % de la línea, aceptando "nan%"
+    // si es nan% => avance = null
+    let avance = null;
+    const pctMatches = [...line.matchAll(/((?:nan)|(?:[0-9]+(?:\.[0-9]+)?))\s*%/gi)];
+    if(pctMatches.length){
+      const last = pctMatches[pctMatches.length-1][1]; // "nan" o número
+      if(String(last).toLowerCase() !== "nan"){
+        avance = safeNum(last);
+      } else {
+        avance = null;
+      }
+    }
+
+    rows.push({concept, meta, obtained, avance, metaNote});
   }
 
   if(rows.length===0) errors.push("No detecté filas de conceptos. Revisa el pegado.");
 
   const metaSum = rows.reduce((a,r)=>a+(r.meta||0),0);
   const obtainedSum = rows.reduce((a,r)=>a+(r.obtained||0),0);
+
   const kpiCalc = metaSum>0 ? (obtainedSum/metaSum)*100 : null;
   const kpi = (kpiReported!=null) ? kpiReported : kpiCalc;
   if(kpiReported==null) warnings.push("No detecté KPI reportado (footer). Usaré KPI calculado.");
 
-  return { rows, totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported}, warnings, errors };
+  return { _v: PARSER_VER, rows, totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported}, warnings, errors };
 }
 
 /** ==============================
@@ -747,9 +771,9 @@ function preview(){
     const tr=document.createElement("tr");
     tr.innerHTML = `
       <td>${r.concept}</td>
-      <td class="num">${r.meta==null?"—":(r.meta.toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
-      <td class="num">${r.obtained==null?"—":r.obtained.toFixed(2)}</td>
-      <td class="num">${r.avance==null?"—":r.avance.toFixed(2)+"%"}</td>
+      <td class="num">${r.meta==null?"—":(Number(r.meta).toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
+      <td class="num">${r.obtained==null?"—":Number(r.obtained).toFixed(2)}</td>
+      <td class="num">${r.avance==null?"—":Number(r.avance).toFixed(2)+"%"}</td>
     `;
     tb.appendChild(tr);
   });
@@ -977,12 +1001,14 @@ function renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany}){
  *  ============================== */
 const asArray = (x)=> Array.isArray(x) ? x : [];
 
+// ✅ IMPORTANTÍSIMO: re-parsea si lo guardado era parser viejo (arregla sin que re-pegues)
 function getParsedCompanyFromRec(rec){
   const parsed = rec?.parsedCompany;
-  if(parsed && Array.isArray(parsed.rows) && parsed.rows.length>0) return parsed;
+  if(parsed && parsed._v === PARSER_VER && Array.isArray(parsed.rows) && parsed.rows.length>0) return parsed;
   const text = rec?.companyText || "";
   return parseCompanyPaste(text);
 }
+
 function getParsedEmployeesFromRec(rec){
   const parsed = rec?.parsedEmployees;
   if(parsed && Array.isArray(parsed.employees) && parsed.employees.length>0) return parsed;
@@ -1287,7 +1313,7 @@ function buildResults(){
   htmlSel += `<div style="margin-top:10px">${buildWeeklyMatrixHTML(company, bucket)}</div>`;
   matrixBox.innerHTML = htmlSel;
 
-  // Empresa por semanas (igual)
+  // Empresa por semanas
   const weeksTbody = $("resWeeksTable").querySelector("tbody");
   weeksTbody.innerHTML="";
   const kpis=[];
@@ -1347,7 +1373,7 @@ function buildResults(){
     weeksTbody.appendChild(tr);
   }
 
-  // KPI mostrado arriba: si hay mensual capturado, úsalo; si no, promedio semanas
+  // KPI mostrado arriba: mensual capturado si existe; si no, promedio semanas
   const aggSel = aggregateMonthlyConcepts(company);
   if(aggSel.source==="mensual"){
     $("resCompanyKpi").textContent = "Mes capturado: " + fmtPct(aggSel.kpiMonth);
@@ -1356,7 +1382,7 @@ function buildResults(){
     $("resCompanyKpi").textContent = hasAny ? ("Promedio semanas: " + fmtPct(avgKpi)) : "";
   }
 
-  // Ranking empleados: Mes = del pegado mensual si existe; Semana = semanal
+  // Ranking empleados
   const viewEmp = $("empWeekView") ? $("empWeekView").value : "mes";
   let empRank=[];
 
@@ -1369,7 +1395,7 @@ function buildResults(){
         .map(e=>({name:e.name, avg:e.calif, weeks:1}))
         .sort((a,b)=>b.avg-a.avg);
     }else{
-      empRank = []; // sin mensual capturado
+      empRank = [];
     }
   }else{
     const rec = bucket[makeKey(company, String(viewEmp))];
@@ -1389,7 +1415,7 @@ function buildResults(){
   });
   $("resEmpCount").textContent = empRank.length ? (empRank.length + " empleados") : (viewEmp==="mes" ? "Sin mensual capturado" : "");
 
-  // Comparativo semanal (igual)
+  // Comparativo semanal
   const weekFilter = $("cmpWeekFilter") ? $("cmpWeekFilter").value : "all";
   const cmpBody = $("cmpWeekly").querySelector("tbody");
   cmpBody.innerHTML="";
@@ -1418,7 +1444,7 @@ function buildResults(){
     renderWeek(Number(weekFilter));
   }
 
-  // Ranking general: Mes = de los mensuales capturados por empresa
+  // Ranking general
   const viewGlobal = $("globalWeekView") ? $("globalWeekView").value : "mes";
   const gBody = $("globalRank").querySelector("tbody");
   gBody.innerHTML="";
@@ -1459,7 +1485,7 @@ function buildResults(){
     gBody.appendChild(tr);
   });
 
-  // Mejor vendedor por empresa (mes): usa mensual capturado
+  // Mejor vendedor por empresa (mes)
   const bestBody = $("bestByCompany").querySelector("tbody");
   bestBody.innerHTML="";
   for(const c of COMPANIES){
@@ -1583,6 +1609,8 @@ function showTab(name){
 </script>
 </body>
 </html>
+
+
 
 
 
