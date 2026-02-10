@@ -510,9 +510,6 @@ const COMPANIES = [
 const STORAGE_KEY = "herrera_reportes_v1";
 const CFG_KEY = "herrera_cfg_v1";
 
-// ✅ versión del parser (para re-parsear datos viejos sin que tengas que re-pegar)
-const PARSER_VER = 2;
-
 function $(id){ return document.getElementById(id); }
 function fmtPct(n){
   if(n==null || !isFinite(n)) return "—";
@@ -525,10 +522,21 @@ function safeNum(s){
   const n = Number(t);
   return isFinite(n) ? n : null;
 }
+function parsePercentToken(s){
+  if(s==null) return null;
+  const t = String(s).trim().toLowerCase();
+  if(!t) return null;
+  if(t.includes("nan")) return null;
+  if(t==="—" || t==="--" || t==="-" ) return null;
+  const m = t.match(/-?\d+(?:\.\d+)?/);
+  if(!m) return null;
+  const n = Number(m[0]);
+  return isFinite(n) ? n : null;
+}
 
-// ✅ IMPORTANTE: NO aplastamos espacios (esto evita bugs con pegados)
+// ✅ IMPORTANTE: ya NO aplastamos espacios
 function normalizeLine(s){
-  return String(s).replace(/\u00a0/g," ").trim();
+  return String(s).replace(/\u00a0/g," ").replace(/\t/g," ").trim();
 }
 
 /** ==============================
@@ -552,19 +560,16 @@ function getBucket(data, year, month){
 function makeKey(company, week){ return company + "||" + week; }
 
 /** ==============================
- *  ✅ Parser Empresa (ROBUSTO, FIX NaN + (70%))
- *  - Evita que (70%) se tome como "obtenido"
- *  - Si el último porcentaje es nan%, avance=null
- *  - KPI SIEMPRE se calcula por SUM(obtenido)/SUM(meta)
+ *  ✅ Parser Empresa (FIX KPI)
+ *  KPI = SUMA de la columna "Obtenido %" (3ra columna con %)
+ *  Ignora nan%
  *  ============================== */
 function parseCompanyPaste(text){
   const warnings=[], errors=[];
   const rawLines = String(text||"").split(/\r?\n/).map(normalizeLine).filter(Boolean);
-  if(rawLines.length===0) {
-    return { _v: PARSER_VER, rows:[], totals:{metaSum:0,obtainedSum:0,kpi:null}, warnings, errors:["Pegado de empresa vacío."]};
-  }
+  if(rawLines.length===0) return {rows:[], totals:{metaSum:0,obtainedSum:0,kpi:null}, warnings, errors:["Pegado de empresa vacío."]};
 
-  // detecta header
+  // Buscar header para iniciar después
   let startIdx = rawLines.findIndex(l=>{
     const x=l.toLowerCase();
     return x.includes("concept") && x.includes("meta") && x.includes("obten");
@@ -577,49 +582,48 @@ function parseCompanyPaste(text){
 
   for(let i=startIdx;i<rawLines.length;i++){
     const line = rawLines[i];
+    const cols = line.split(/\s{2,}/).map(s=>s.trim()).filter(Boolean);
+    if(!cols.length) continue;
 
-    // footer tipo: "50.79% 100% - -" (si empieza con número%)
-    const footer = line.match(/^\s*([0-9]+(?:\.[0-9]+)?)\s*%\s+/);
-    if(footer && line.includes("-")){
-      kpiReported = Number(footer[1]);
-      continue;
-    }
+    // Footer típico que a veces trae "nan% 100% --" -> NO es concepto
+    const c0 = (cols[0]||"").toLowerCase();
+    if(c0==="nan%" || (c0.includes("nan") && cols.length<=3)) continue;
 
-    // concepto = texto al inicio hasta que empiece número
-    const conceptMatch = line.match(/^\s*([A-Za-zÁÉÍÓÚÑáéíóúñ][^0-9]*)\s+/);
-    if(!conceptMatch) continue;
-    const concept = conceptMatch[1].trim();
-    if(!concept) continue;
-
-    const afterConcept = line.slice(conceptMatch[0].length);
-
-    // meta puede venir con nota: "0.0 (70%)"
-    const metaMatch = afterConcept.match(/^([0-9]+(?:\.[0-9]+)?)\s*(\([^)]+\))?/);
-    const meta = metaMatch ? safeNum(metaMatch[1]) : null;
-    const metaNote = metaMatch && metaMatch[2] ? metaMatch[2].trim() : null;
-
-    // ✅ OBTENIDO: primer número DESPUÉS de lo consumido (meta + nota)
-    let obtained = null;
-    if(metaMatch){
-      const rest = afterConcept.slice(metaMatch[0].length).trim();
-      const obtMatch = rest.match(/([0-9]+(?:\.[0-9]+)?)/);
-      obtained = obtMatch ? safeNum(obtMatch[1]) : null;
-    }
-
-    // ✅ AVANCE: toma el ÚLTIMO % de la línea, aceptando "nan%"
-    // si es nan% => avance = null
-    let avance = null;
-    const pctMatches = [...line.matchAll(/((?:nan)|(?:[0-9]+(?:\.[0-9]+)?))\s*%/gi)];
-    if(pctMatches.length){
-      const last = pctMatches[pctMatches.length-1][1]; // "nan" o número
-      if(String(last).toLowerCase() !== "nan"){
-        avance = safeNum(last);
-      } else {
-        avance = null;
+    // Si hay un footer de KPI numérico (si existiera) lo agarramos
+    // (en muchos casos viene "67.80% ...", si no existe o es nan, no pasa nada)
+    if(cols.length>=2 && /%/.test(cols[0]) && cols[0].toLowerCase().includes("nan")===false){
+      const maybe = parsePercentToken(cols[0]);
+      if(maybe!=null && isFinite(maybe) && cols.join(" ").includes("-")){
+        kpiReported = maybe;
+        continue;
       }
     }
 
-    rows.push({concept, meta, obtained, avance, metaNote});
+    const concept = cols[0] || "";
+    if(!concept) continue;
+
+    // Esperado (por tu tabla):
+    // 0 Concepto | 1 Meta (verde) | 2 Obtenido (azul) | 3 Obtenido% (contribución KPI) | 4 Meta (peso) | 5 Avance%
+    const metaLeft = safeNum(cols[1]);
+    const obtainedLeft = safeNum(cols[2]);
+
+    const obtenidoPct = parsePercentToken(cols[3]);     // <-- ESTE ES EL QUE SUMAMOS PARA KPI
+    const metaWeight = parsePercentToken(cols[4]);      // puede venir "45%" o "8.00"
+    const avance = parsePercentToken(cols[5]);          // puede venir "nan%"
+
+    // Nota tipo "(70%)" pegada a la meta izquierda
+    const metaNoteMatch = (cols[1]||"").match(/\([^)]+\)/);
+    const metaNote = metaNoteMatch ? metaNoteMatch[0].trim() : null;
+
+    rows.push({
+      concept,
+      meta: metaLeft,
+      obtained: obtainedLeft,
+      avance,
+      metaNote,
+      obtenidoPct,   // <-- guardamos para KPI correcto
+      metaWeight
+    });
   }
 
   if(rows.length===0) errors.push("No detecté filas de conceptos. Revisa el pegado.");
@@ -627,11 +631,12 @@ function parseCompanyPaste(text){
   const metaSum = rows.reduce((a,r)=>a+(r.meta||0),0);
   const obtainedSum = rows.reduce((a,r)=>a+(r.obtained||0),0);
 
-  const kpiCalc = metaSum>0 ? (obtainedSum/metaSum)*100 : null;
-  const kpi = (kpiReported!=null) ? kpiReported : kpiCalc;
-  if(kpiReported==null) warnings.push("No detecté KPI reportado (footer). Usaré KPI calculado.");
+  // ✅ KPI correcto: suma de "Obtenido %" (col 3) ignorando nan
+  const kpiCalc = rows.reduce((a,r)=>a+((r.obtenidoPct!=null && isFinite(r.obtenidoPct)) ? r.obtenidoPct : 0), 0);
 
-  return { _v: PARSER_VER, rows, totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported}, warnings, errors };
+  const kpi = (kpiReported!=null && isFinite(kpiReported)) ? kpiReported : (isFinite(kpiCalc) ? kpiCalc : null);
+
+  return { rows, totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported}, warnings, errors };
 }
 
 /** ==============================
@@ -754,7 +759,7 @@ function preview(){
   const kpiWrap = $("companyKpis");
   kpiWrap.innerHTML="";
   const boxes = [
-    ["KPI usado", fmtPct(c.totals.kpi)],
+    ["KPI usado", fmtPct(c.totals.kpi)],                 // ✅ KPI ahora es suma de "Obtenido %"
     ["Meta sum", (c.totals.metaSum||0).toFixed(2)],
     ["Obtenido sum", (c.totals.obtainedSum||0).toFixed(2)],
   ];
@@ -771,9 +776,9 @@ function preview(){
     const tr=document.createElement("tr");
     tr.innerHTML = `
       <td>${r.concept}</td>
-      <td class="num">${r.meta==null?"—":(Number(r.meta).toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
-      <td class="num">${r.obtained==null?"—":Number(r.obtained).toFixed(2)}</td>
-      <td class="num">${r.avance==null?"—":Number(r.avance).toFixed(2)+"%"}</td>
+      <td class="num">${r.meta==null?"—":(r.meta.toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
+      <td class="num">${r.obtained==null?"—":r.obtained.toFixed(2)}</td>
+      <td class="num">${r.avance==null?"—":r.avance.toFixed(2)+"%"}</td>
     `;
     tb.appendChild(tr);
   });
@@ -1001,14 +1006,12 @@ function renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany}){
  *  ============================== */
 const asArray = (x)=> Array.isArray(x) ? x : [];
 
-// ✅ IMPORTANTÍSIMO: re-parsea si lo guardado era parser viejo (arregla sin que re-pegues)
 function getParsedCompanyFromRec(rec){
   const parsed = rec?.parsedCompany;
-  if(parsed && parsed._v === PARSER_VER && Array.isArray(parsed.rows) && parsed.rows.length>0) return parsed;
+  if(parsed && Array.isArray(parsed.rows) && parsed.rows.length>0) return parsed;
   const text = rec?.companyText || "";
   return parseCompanyPaste(text);
 }
-
 function getParsedEmployeesFromRec(rec){
   const parsed = rec?.parsedEmployees;
   if(parsed && Array.isArray(parsed.employees) && parsed.employees.length>0) return parsed;
@@ -1373,7 +1376,7 @@ function buildResults(){
     weeksTbody.appendChild(tr);
   }
 
-  // KPI mostrado arriba: mensual capturado si existe; si no, promedio semanas
+  // KPI mostrado arriba: si hay mensual capturado, úsalo; si no, promedio semanas
   const aggSel = aggregateMonthlyConcepts(company);
   if(aggSel.source==="mensual"){
     $("resCompanyKpi").textContent = "Mes capturado: " + fmtPct(aggSel.kpiMonth);
@@ -1511,7 +1514,6 @@ function buildResults(){
 
   renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany});
 
-  // Aviso
   const anyMonthly = COMPANIES.some(c=> !!getMonthlyRec(c));
   if(!hasAny && !anyMonthly){
     setMsg($("resMsg"), "No hay datos guardados para ese mes. Ve a Datos y guarda semanas o Mensual.", "warn");
@@ -1609,6 +1611,7 @@ function showTab(name){
 </script>
 </body>
 </html>
+
 
 
 
