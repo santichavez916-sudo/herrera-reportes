@@ -159,7 +159,7 @@
       <div class="grid2">
         <div>
           <label>Pegado Empresa (tabla de conceptos)</label>
-          <textarea id="pasteCompany" placeholder="Pega aquí la tabla de empresa (Conceptos, Meta, Obtenido, Obtenido%, Meta%, Avance%)"></textarea>
+          <textarea id="pasteCompany" placeholder="Pega aquí la tabla de empresa (Conceptos, Meta, Obtenido, ... Avance%)"></textarea>
         </div>
         <div>
           <label>Pegado Empleados (bloques Agenda / Calificación)</label>
@@ -184,7 +184,7 @@
               <table id="companyTable">
                 <thead>
                   <tr>
-                    <th>Concepto</th><th class="right">Meta</th><th class="right">Obtenido</th><th class="right">Obtenido%</th>
+                    <th>Concepto</th><th class="right">Meta</th><th class="right">Obtenido</th><th class="right">Avance%</th>
                   </tr>
                 </thead>
                 <tbody></tbody>
@@ -510,6 +510,9 @@ const COMPANIES = [
 const STORAGE_KEY = "herrera_reportes_v1";
 const CFG_KEY = "herrera_cfg_v1";
 
+// ✅ versión del parser (para re-parsear datos viejos sin que tengas que re-pegar)
+const PARSER_VER = 2;
+
 function $(id){ return document.getElementById(id); }
 function fmtPct(n){
   if(n==null || !isFinite(n)) return "—";
@@ -522,6 +525,8 @@ function safeNum(s){
   const n = Number(t);
   return isFinite(n) ? n : null;
 }
+
+// ✅ IMPORTANTE: NO aplastamos espacios (esto evita bugs con pegados)
 function normalizeLine(s){
   return String(s).replace(/\u00a0/g," ").trim();
 }
@@ -547,23 +552,19 @@ function getBucket(data, year, month){
 function makeKey(company, week){ return company + "||" + week; }
 
 /** ==============================
- *  ✅ Parser Empresa (KPI correcto)
- *  KPI:
- *   - si footer trae KPI numérico: usarlo
- *   - si footer viene nan%: KPI = suma de Obtenido% (columna 4)
+ *  ✅ Parser Empresa (ROBUSTO, FIX NaN + (70%))
+ *  - Evita que (70%) se tome como "obtenido"
+ *  - Si el último porcentaje es nan%, avance=null
+ *  - KPI SIEMPRE se calcula por SUM(obtenido)/SUM(meta)
  *  ============================== */
 function parseCompanyPaste(text){
   const warnings=[], errors=[];
-  const rawLines = String(text||"")
-    .split(/\r?\n/)
-    .map(normalizeLine)
-    .filter(Boolean);
-
-  if(rawLines.length===0){
-    return {rows:[], totals:{metaSum:0,obtainedSum:0,kpi:null,kpiCalc:null,kpiReported:null}, warnings, errors:["Pegado de empresa vacío."]};
+  const rawLines = String(text||"").split(/\r?\n/).map(normalizeLine).filter(Boolean);
+  if(rawLines.length===0) {
+    return { _v: PARSER_VER, rows:[], totals:{metaSum:0,obtainedSum:0,kpi:null}, warnings, errors:["Pegado de empresa vacío."]};
   }
 
-  // Detect header
+  // detecta header
   let startIdx = rawLines.findIndex(l=>{
     const x=l.toLowerCase();
     return x.includes("concept") && x.includes("meta") && x.includes("obten");
@@ -574,92 +575,51 @@ function parseCompanyPaste(text){
   const rows=[];
   let kpiReported=null;
 
-  function pctToNum(x){
-    if(x==null) return null;
-    const s = String(x).trim().toLowerCase();
-    if(!s || s==="nan" || s==="nan%") return null;
-    return safeNum(s); // safeNum quita % y deja número
-  }
-
   for(let i=startIdx;i<rawLines.length;i++){
     const line = rawLines[i];
 
-    // Footer: "51.87% 100% - -" ó "nan% 100% - -"
-    const footerMatch = line.match(/^\s*([0-9]+(?:[.,][0-9]+)?|nan)\s*%\s*/i);
-    if(footerMatch){
-      const v = pctToNum(footerMatch[1] + "%");
-      if(v!=null && isFinite(v)) kpiReported = v; // solo si no es nan
+    // footer tipo: "50.79% 100% - -" (si empieza con número%)
+    const footer = line.match(/^\s*([0-9]+(?:\.[0-9]+)?)\s*%\s+/);
+    if(footer && line.includes("-")){
+      kpiReported = Number(footer[1]);
       continue;
     }
 
-    // Preferencia: si viene con tabs, parse por columnas
-    const cols = line.split("\t").map(s=>String(s).trim());
-
-    let concept = "";
-    let metaRaw = "", obtainedRaw = "", obtainedPctRaw = "", metaPctRaw = "", avanceRaw = "";
-
-    if(cols.length >= 4){
-      concept = cols[0] || "";
-      metaRaw = cols[1] ?? "";
-      obtainedRaw = cols[2] ?? "";
-      obtainedPctRaw = cols[3] ?? "";
-      metaPctRaw = cols[4] ?? "";
-      avanceRaw = cols[5] ?? "";
-    }else{
-      // Fallback robusto si no trae tabs
-      // Intentar: Concepto + números/porcentajes en orden
-      const conceptMatch = line.match(/^\s*([A-Za-zÁÉÍÓÚÑáéíóúñ][^0-9]*)\s+/);
-      if(!conceptMatch) continue;
-      concept = conceptMatch[1].trim();
-      const rest = line.slice(conceptMatch[0].length);
-
-      // Meta (puede traer "(70%)")
-      const metaMatch = rest.match(/^([0-9]+(?:\.[0-9]+)?)\s*(\([^)]+\))?/);
-      metaRaw = metaMatch ? (metaMatch[1] + (metaMatch[2] ? " " + metaMatch[2] : "")) : "";
-
-      // Obtenido num (2do número)
-      const nums = rest.match(/[0-9]+(?:\.[0-9]+)?/g) || [];
-      obtainedRaw = nums.length>=2 ? nums[1] : "";
-
-      // %: normalmente: Obtenido% ... Avance%
-      const percents = line.match(/[0-9]+(?:\.[0-9]+)?\s*%|nan\s*%/gi) || [];
-      obtainedPctRaw = percents.length>=1 ? percents[0] : "";
-      avanceRaw = percents.length>=2 ? percents[percents.length-1] : "";
-      // metaPctRaw (si existiera) no es crítico aquí
-      metaPctRaw = "";
-    }
-
+    // concepto = texto al inicio hasta que empiece número
+    const conceptMatch = line.match(/^\s*([A-Za-zÁÉÍÓÚÑáéíóúñ][^0-9]*)\s+/);
+    if(!conceptMatch) continue;
+    const concept = conceptMatch[1].trim();
     if(!concept) continue;
-    if(String(concept).toLowerCase().includes("nan%")) continue;
 
-    // Meta puede traer nota: "0.0 (70%)"
-    const metaMatch2 = String(metaRaw).match(/^([0-9]+(?:[.,][0-9]+)?)\s*(\([^)]+\))?/);
-    const meta = metaMatch2 ? safeNum(metaMatch2[1]) : safeNum(metaRaw);
-    const metaNote = metaMatch2 && metaMatch2[2] ? metaMatch2[2].trim() : null;
+    const afterConcept = line.slice(conceptMatch[0].length);
 
-    const obtained = safeNum(obtainedRaw);
-    const obtainedPct = pctToNum(obtainedPctRaw);
+    // meta puede venir con nota: "0.0 (70%)"
+    const metaMatch = afterConcept.match(/^([0-9]+(?:\.[0-9]+)?)\s*(\([^)]+\))?/);
+    const meta = metaMatch ? safeNum(metaMatch[1]) : null;
+    const metaNote = metaMatch && metaMatch[2] ? metaMatch[2].trim() : null;
 
-    // metaPct puede venir como "6.67" o "45%"
-    let metaPct = null;
-    if(metaPctRaw){
-      const s = String(metaPctRaw).trim().toLowerCase();
-      if(s==="nan" || s==="nan%") metaPct = null;
-      else metaPct = safeNum(metaPctRaw);
+    // ✅ OBTENIDO: primer número DESPUÉS de lo consumido (meta + nota)
+    let obtained = null;
+    if(metaMatch){
+      const rest = afterConcept.slice(metaMatch[0].length).trim();
+      const obtMatch = rest.match(/([0-9]+(?:\.[0-9]+)?)/);
+      obtained = obtMatch ? safeNum(obtMatch[1]) : null;
     }
 
-    // Avance% si viene (sirve como respaldo)
-    const avancePct = pctToNum(avanceRaw);
+    // ✅ AVANCE: toma el ÚLTIMO % de la línea, aceptando "nan%"
+    // si es nan% => avance = null
+    let avance = null;
+    const pctMatches = [...line.matchAll(/((?:nan)|(?:[0-9]+(?:\.[0-9]+)?))\s*%/gi)];
+    if(pctMatches.length){
+      const last = pctMatches[pctMatches.length-1][1]; // "nan" o número
+      if(String(last).toLowerCase() !== "nan"){
+        avance = safeNum(last);
+      } else {
+        avance = null;
+      }
+    }
 
-    rows.push({
-      concept,
-      meta: (meta!=null && isFinite(meta)) ? meta : null,
-      obtained: (obtained!=null && isFinite(obtained)) ? obtained : null,
-      obtainedPct: (obtainedPct!=null && isFinite(obtainedPct)) ? obtainedPct : null,
-      metaPct: (metaPct!=null && isFinite(metaPct)) ? metaPct : null,
-      avance: (avancePct!=null && isFinite(avancePct)) ? avancePct : null,
-      metaNote
-    });
+    rows.push({concept, meta, obtained, avance, metaNote});
   }
 
   if(rows.length===0) errors.push("No detecté filas de conceptos. Revisa el pegado.");
@@ -667,25 +627,11 @@ function parseCompanyPaste(text){
   const metaSum = rows.reduce((a,r)=>a+(r.meta||0),0);
   const obtainedSum = rows.reduce((a,r)=>a+(r.obtained||0),0);
 
-  // ✅ KPI correcto:
-  // 1) si hay obtainedPct -> sumarlo
-  // 2) si obtainedPct es null pero hay metaPct y avance -> metaPct * avance/100
-  // 3) si no hay info -> 0
-  const kpiCalc = rows.reduce((acc,r)=>{
-    if(r.obtainedPct!=null && isFinite(r.obtainedPct)) return acc + r.obtainedPct;
-    if(r.metaPct!=null && r.avance!=null && isFinite(r.metaPct) && isFinite(r.avance)) return acc + (r.metaPct * (r.avance/100));
-    return acc + 0;
-  }, 0);
+  const kpiCalc = metaSum>0 ? (obtainedSum/metaSum)*100 : null;
+  const kpi = (kpiReported!=null) ? kpiReported : kpiCalc;
+  if(kpiReported==null) warnings.push("No detecté KPI reportado (footer). Usaré KPI calculado.");
 
-  const kpi = (kpiReported!=null && isFinite(kpiReported)) ? kpiReported : kpiCalc;
-  if(kpiReported==null) warnings.push("No detecté KPI reportado (footer). Usaré suma de Obtenido%.");
-
-  return {
-    rows,
-    totals:{ metaSum, obtainedSum, kpi, kpiCalc, kpiReported },
-    warnings,
-    errors
-  };
+  return { _v: PARSER_VER, rows, totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported}, warnings, errors };
 }
 
 /** ==============================
@@ -825,9 +771,9 @@ function preview(){
     const tr=document.createElement("tr");
     tr.innerHTML = `
       <td>${r.concept}</td>
-      <td class="num">${r.meta==null?"—":(r.meta.toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
-      <td class="num">${r.obtained==null?"—":r.obtained.toFixed(2)}</td>
-      <td class="num">${r.obtainedPct==null?"—":r.obtainedPct.toFixed(2)+"%"}</td>
+      <td class="num">${r.meta==null?"—":(Number(r.meta).toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
+      <td class="num">${r.obtained==null?"—":Number(r.obtained).toFixed(2)}</td>
+      <td class="num">${r.avance==null?"—":Number(r.avance).toFixed(2)+"%"}</td>
     `;
     tb.appendChild(tr);
   });
@@ -1055,12 +1001,14 @@ function renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany}){
  *  ============================== */
 const asArray = (x)=> Array.isArray(x) ? x : [];
 
+// ✅ IMPORTANTÍSIMO: re-parsea si lo guardado era parser viejo (arregla sin que re-pegues)
 function getParsedCompanyFromRec(rec){
   const parsed = rec?.parsedCompany;
-  if(parsed && Array.isArray(parsed.rows) && parsed.rows.length>0) return parsed;
+  if(parsed && parsed._v === PARSER_VER && Array.isArray(parsed.rows) && parsed.rows.length>0) return parsed;
   const text = rec?.companyText || "";
   return parseCompanyPaste(text);
 }
+
 function getParsedEmployeesFromRec(rec){
   const parsed = rec?.parsedEmployees;
   if(parsed && Array.isArray(parsed.employees) && parsed.employees.length>0) return parsed;
@@ -1081,7 +1029,7 @@ function buildMonthlyCompanyTableHTML(pc){
             <th>Concepto</th>
             <th class="right">Meta</th>
             <th class="right">Obtenido</th>
-            <th class="right">Obtenido%</th>
+            <th class="right">Avance%</th>
           </tr>
         </thead>
         <tbody>
@@ -1090,7 +1038,7 @@ function buildMonthlyCompanyTableHTML(pc){
               <td>${r.concept}</td>
               <td class="num">${r.meta==null?"—":(Number(r.meta).toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
               <td class="num">${r.obtained==null?"—":Number(r.obtained).toFixed(2)}</td>
-              <td class="num">${r.obtainedPct==null?"—":Number(r.obtainedPct).toFixed(2)+"%"}</td>
+              <td class="num">${r.avance==null?"—":Number(r.avance).toFixed(2)+"%"}</td>
             </tr>
           `).join("")}
         </tbody>
@@ -1124,18 +1072,12 @@ function buildWeeklyMatrixHTML(companyName, bucket){
       const key = normConcept(r.concept);
       if(!key) continue;
       if(!conceptMap.has(key)){
-        conceptMap.set(key, {label:r.concept, weeks:{}, metaMonth:0, obtMonth:0, obtPctMonth:0});
+        conceptMap.set(key, {label:r.concept, weeks:{}, metaMonth:0, obtMonth:0});
       }
       const obj = conceptMap.get(key);
-      obj.weeks[w] = {
-        meta:r.meta??null,
-        obt:r.obtained??null,
-        obtPct:r.obtainedPct??null,
-        note:r.metaNote||null
-      };
+      obj.weeks[w] = {meta:r.meta??null, obt:r.obtained??null, av:r.avance??null, note:r.metaNote||null};
       obj.metaMonth += (r.meta||0);
       obj.obtMonth += (r.obtained||0);
-      obj.obtPctMonth += (r.obtainedPct||0);
     }
   }
 
@@ -1161,13 +1103,14 @@ function buildWeeklyMatrixHTML(companyName, bucket){
 
   const rowsHtml = keys.map(k=>{
     const c = conceptMap.get(k);
+    const monthAv = (c.metaMonth>0) ? (c.obtMonth/c.metaMonth)*100 : null;
 
     const weekCells = weekCols.map(w=>{
       const cell = c.weeks[w] || {};
       const meta = cell.meta==null ? "—" : (Number(cell.meta).toFixed(2) + (cell.note?(" "+cell.note):""));
       const obt  = cell.obt==null ? "—" : Number(cell.obt).toFixed(2);
-      const obtPct = cell.obtPct==null ? "—" : Number(cell.obtPct).toFixed(2)+"%";
-      return `<td class="num">${meta}</td><td class="num">${obt}</td><td class="num">${obtPct}</td>`;
+      const av   = cell.av==null ? "—" : Number(cell.av).toFixed(2)+"%";
+      return `<td class="num">${meta}</td><td class="num">${obt}</td><td class="num">${av}</td>`;
     }).join("");
 
     return `
@@ -1176,14 +1119,14 @@ function buildWeeklyMatrixHTML(companyName, bucket){
         ${weekCells}
         <td class="num"><b>${c.metaMonth ? c.metaMonth.toFixed(2) : "—"}</b></td>
         <td class="num"><b>${c.obtMonth ? c.obtMonth.toFixed(2) : "—"}</b></td>
-        <td class="num"><b>${c.obtPctMonth!=null ? c.obtPctMonth.toFixed(2)+"%" : "—"}</b></td>
+        <td class="num"><b>${monthAv==null ? "—" : monthAv.toFixed(2)+"%"}</b></td>
       </tr>
     `;
   }).join("");
 
   const advanceRow = `
     <tr>
-      <td><b>KPI Semana (sistema)</b></td>
+      <td><b>Avance General</b></td>
       ${weekCols.map(w=>{
         const wk = weekKpis.find(x=>x.w===w);
         const v = wk ? wk.kpi.toFixed(2)+"%" : "—";
@@ -1204,8 +1147,8 @@ function buildWeeklyMatrixHTML(companyName, bucket){
           </tr>
           <tr>
             <th></th>
-            ${weekCols.map(()=> `${subHead("Meta")}${subHead("Obtenido")}${subHead("Obtenido%")}`).join("")}
-            ${subHead("Meta")}${subHead("Obtenido")}${subHead("Obtenido%")}
+            ${weekCols.map(()=> `${subHead("Meta")}${subHead("Obtenido")}${subHead("Avance")}`).join("")}
+            ${subHead("Meta")}${subHead("Obtenido")}${subHead("Avance")}
           </tr>
         </thead>
         <tbody>
@@ -1281,17 +1224,17 @@ function buildResults(){
       rows.forEach(r=>{
         const key=r.concept;
         if(!key) return;
-        if(!map.has(key)) map.set(key, {metaSum:0, obtainedSum:0, obtainedPctSum:0, metaNote:r.metaNote||null});
+        if(!map.has(key)) map.set(key, {metaSum:0, obtainedSum:0, metaNote:r.metaNote||null});
         const o=map.get(key);
         o.metaSum += (r.meta||0);
         o.obtainedSum += (r.obtained||0);
-        o.obtainedPctSum += (r.obtainedPct||0);
         if(r.metaNote) o.metaNote = r.metaNote;
       });
     }
 
     const rows = [...map.entries()].map(([concept,o])=>{
-      return {concept, meta:o.metaSum, obtained:o.obtainedSum, obtainedPct:o.obtainedPctSum, metaNote:o.metaNote};
+      const avance = o.metaSum>0 ? (o.obtainedSum/o.metaSum)*100 : null;
+      return {concept, meta:o.metaSum, obtained:o.obtainedSum, avance, metaNote:o.metaNote};
     });
 
     const kpiAvg = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
@@ -1400,7 +1343,7 @@ function buildResults(){
                   <th>Concepto</th>
                   <th class="right">Meta</th>
                   <th class="right">Obtenido</th>
-                  <th class="right">Obtenido%</th>
+                  <th class="right">Avance%</th>
                 </tr>
               </thead>
               <tbody>
@@ -1409,7 +1352,7 @@ function buildResults(){
                     <td>${r.concept}</td>
                     <td class="num">${r.meta==null?"—":(Number(r.meta).toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
                     <td class="num">${r.obtained==null?"—":Number(r.obtained).toFixed(2)}</td>
-                    <td class="num">${r.obtainedPct==null?"—":Number(r.obtainedPct).toFixed(2)+"%"}</td>
+                    <td class="num">${r.avance==null?"—":Number(r.avance).toFixed(2)+"%"}</td>
                   </tr>
                 `).join("")}
               </tbody>
@@ -1430,7 +1373,7 @@ function buildResults(){
     weeksTbody.appendChild(tr);
   }
 
-  // KPI mostrado arriba: si hay mensual capturado, úsalo; si no, promedio semanas
+  // KPI mostrado arriba: mensual capturado si existe; si no, promedio semanas
   const aggSel = aggregateMonthlyConcepts(company);
   if(aggSel.source==="mensual"){
     $("resCompanyKpi").textContent = "Mes capturado: " + fmtPct(aggSel.kpiMonth);
@@ -1666,8 +1609,6 @@ function showTab(name){
 </script>
 </body>
 </html>
-
-
 
 
 
