@@ -493,12 +493,12 @@
 const COMPANIES = [
   'HERRERA MOTORS SUR',
   'HERRERA MOTORS NORTE',
-  'SEMINUEVOS NORTE',
+  'SEMINUEVOS',
   'EUROFRANCE AUTOS DE AGUASCALIENTES',
   'AMERITALI AUTOS SA DE CV',
   'SEMINUEVOS SUR',
-  'HERRERA MOTORS LEADS',
-  'LEADS SEMINUEVOS',
+  'HERRERA MOTORS LEATS',
+  'LEATS SEMINUEVOS',
   'SEMINUEVOS 1ER ANILLO',
   'GAC',
   'FLOTILLAS',
@@ -509,9 +509,6 @@ const COMPANIES = [
 
 const STORAGE_KEY = "herrera_reportes_v1";
 const CFG_KEY = "herrera_cfg_v1";
-
-// ✅ versión del parser (para re-parsear datos viejos sin que tengas que re-pegar)
-const PARSER_VER = 2;
 
 function $(id){ return document.getElementById(id); }
 function fmtPct(n){
@@ -526,7 +523,15 @@ function safeNum(s){
   return isFinite(n) ? n : null;
 }
 
-// ✅ IMPORTANTE: NO aplastamos espacios (esto evita bugs con pegados)
+/** ✅ NUEVO: convierte tokens tipo "6.7%" o "nan%" a número */
+function pctTokenToNumber(token){
+  if(token == null) return null;
+  const t = String(token).trim().toLowerCase();
+  if(t.includes("nan")) return NaN;
+  return safeNum(t);
+}
+
+// ✅ IMPORTANTE: ya NO aplastamos espacios (esto era el bug)
 function normalizeLine(s){
   return String(s).replace(/\u00a0/g," ").trim();
 }
@@ -552,19 +557,26 @@ function getBucket(data, year, month){
 function makeKey(company, week){ return company + "||" + week; }
 
 /** ==============================
- *  ✅ Parser Empresa (ROBUSTO, FIX NaN + (70%))
- *  - Evita que (70%) se tome como "obtenido"
- *  - Si el último porcentaje es nan%, avance=null
- *  - KPI SIEMPRE se calcula por SUM(obtenido)/SUM(meta)
+ *  Parser Empresa (ROBUSTO)
+ *  ✅ FIX: si hay nan% => KPI = suma de "Obtenido %"
  *  ============================== */
 function parseCompanyPaste(text){
   const warnings=[], errors=[];
-  const rawLines = String(text||"").split(/\r?\n/).map(normalizeLine).filter(Boolean);
-  if(rawLines.length===0) {
-    return { _v: PARSER_VER, rows:[], totals:{metaSum:0,obtainedSum:0,kpi:null}, warnings, errors:["Pegado de empresa vacío."]};
+  const rawText = String(text||"");
+  const rawLines = rawText.split(/\r?\n/).map(normalizeLine).filter(Boolean);
+
+  if(rawLines.length===0){
+    return {
+      rows:[],
+      totals:{metaSum:0,obtainedSum:0,kpi:null},
+      warnings,
+      errors:["Pegado de empresa vacío."]
+    };
   }
 
-  // detecta header
+  // ✅ Detecta si en el pegado viene nan%
+  const hasNanInPaste = /nan\s*%/i.test(rawText);
+
   let startIdx = rawLines.findIndex(l=>{
     const x=l.toLowerCase();
     return x.includes("concept") && x.includes("meta") && x.includes("obten");
@@ -578,14 +590,12 @@ function parseCompanyPaste(text){
   for(let i=startIdx;i<rawLines.length;i++){
     const line = rawLines[i];
 
-    // footer tipo: "50.79% 100% - -" (si empieza con número%)
     const footer = line.match(/^\s*([0-9]+(?:\.[0-9]+)?)\s*%\s+/);
     if(footer && line.includes("-")){
       kpiReported = Number(footer[1]);
       continue;
     }
 
-    // concepto = texto al inicio hasta que empiece número
     const conceptMatch = line.match(/^\s*([A-Za-zÁÉÍÓÚÑáéíóúñ][^0-9]*)\s+/);
     if(!conceptMatch) continue;
     const concept = conceptMatch[1].trim();
@@ -593,45 +603,61 @@ function parseCompanyPaste(text){
 
     const afterConcept = line.slice(conceptMatch[0].length);
 
-    // meta puede venir con nota: "0.0 (70%)"
     const metaMatch = afterConcept.match(/^([0-9]+(?:\.[0-9]+)?)\s*(\([^)]+\))?/);
     const meta = metaMatch ? safeNum(metaMatch[1]) : null;
     const metaNote = metaMatch && metaMatch[2] ? metaMatch[2].trim() : null;
 
-    // ✅ OBTENIDO: primer número DESPUÉS de lo consumido (meta + nota)
-    let obtained = null;
-    if(metaMatch){
-      const rest = afterConcept.slice(metaMatch[0].length).trim();
-      const obtMatch = rest.match(/([0-9]+(?:\.[0-9]+)?)/);
-      obtained = obtMatch ? safeNum(obtMatch[1]) : null;
-    }
+    const nums = afterConcept.match(/[0-9]+(?:\.[0-9]+)?/g) || [];
+    const metaFromNums = nums.length>=1 ? safeNum(nums[0]) : meta;
+    const obtained = nums.length>=2 ? safeNum(nums[1]) : null;
 
-    // ✅ AVANCE: toma el ÚLTIMO % de la línea, aceptando "nan%"
-    // si es nan% => avance = null
+    /**
+     * ✅ NUEVO:
+     * - sacamos el "Obtenido %" (primera % de la fila, ignorando notas tipo (70%))
+     * - y el "Avance" lo tomamos como la última % (también ignorando notas)
+     */
+    let lineForPct = line;
+
+    // quita la nota meta "(70%)" si venía detectada
+    if(metaNote) lineForPct = lineForPct.replace(metaNote, "");
+
+    // quita cualquier nota tipo "(70%)" aunque no haya sido detectada
+    lineForPct = lineForPct.replace(/\(\s*(?:nan|[0-9]+(?:\.[0-9]+)?)\s*%\s*\)/gi, "");
+
+    const pctTokens = (lineForPct.match(/(?:nan|[0-9]+(?:\.[0-9]+)?)\s*%/gi) || []);
+
+    const obtainedPct = pctTokens.length ? pctTokenToNumber(pctTokens[0]) : null;
+
     let avance = null;
-    const pctMatches = [...line.matchAll(/((?:nan)|(?:[0-9]+(?:\.[0-9]+)?))\s*%/gi)];
-    if(pctMatches.length){
-      const last = pctMatches[pctMatches.length-1][1]; // "nan" o número
-      if(String(last).toLowerCase() !== "nan"){
-        avance = safeNum(last);
-      } else {
-        avance = null;
-      }
+    if(pctTokens.length){
+      const last = pctTokens[pctTokens.length-1];
+      const v = pctTokenToNumber(last);
+      avance = (v!=null && isFinite(v)) ? v : null;
     }
 
-    rows.push({concept, meta, obtained, avance, metaNote});
+    rows.push({concept, meta: metaFromNums ?? meta, obtained, avance, metaNote, obtainedPct});
   }
 
   if(rows.length===0) errors.push("No detecté filas de conceptos. Revisa el pegado.");
 
   const metaSum = rows.reduce((a,r)=>a+(r.meta||0),0);
   const obtainedSum = rows.reduce((a,r)=>a+(r.obtained||0),0);
-
   const kpiCalc = metaSum>0 ? (obtainedSum/metaSum)*100 : null;
-  const kpi = (kpiReported!=null) ? kpiReported : kpiCalc;
+
+  // KPI base (como antes)
+  let kpi = (kpiReported!=null) ? kpiReported : kpiCalc;
   if(kpiReported==null) warnings.push("No detecté KPI reportado (footer). Usaré KPI calculado.");
 
-  return { _v: PARSER_VER, rows, totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported}, warnings, errors };
+  // ✅ FIX solicitado: solo si hay nan% => KPI = suma de "Obtenido %"
+  const obtainedPctSum = rows.reduce((s,r)=> s + (isFinite(r.obtainedPct) ? r.obtainedPct : 0), 0);
+  const foundObtPct = rows.some(r => r.obtainedPct != null && isFinite(r.obtainedPct));
+
+  if(hasNanInPaste && foundObtPct){
+    kpi = obtainedPctSum;
+    warnings.push("Detecté 'nan%'. KPI = suma de 'Obtenido %'.");
+  }
+
+  return { rows, totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported}, warnings, errors };
 }
 
 /** ==============================
@@ -771,9 +797,9 @@ function preview(){
     const tr=document.createElement("tr");
     tr.innerHTML = `
       <td>${r.concept}</td>
-      <td class="num">${r.meta==null?"—":(Number(r.meta).toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
-      <td class="num">${r.obtained==null?"—":Number(r.obtained).toFixed(2)}</td>
-      <td class="num">${r.avance==null?"—":Number(r.avance).toFixed(2)+"%"}</td>
+      <td class="num">${r.meta==null?"—":(r.meta.toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
+      <td class="num">${r.obtained==null?"—":r.obtained.toFixed(2)}</td>
+      <td class="num">${r.avance==null?"—":r.avance.toFixed(2)+"%"}</td>
     `;
     tb.appendChild(tr);
   });
@@ -1001,14 +1027,12 @@ function renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany}){
  *  ============================== */
 const asArray = (x)=> Array.isArray(x) ? x : [];
 
-// ✅ IMPORTANTÍSIMO: re-parsea si lo guardado era parser viejo (arregla sin que re-pegues)
 function getParsedCompanyFromRec(rec){
   const parsed = rec?.parsedCompany;
-  if(parsed && parsed._v === PARSER_VER && Array.isArray(parsed.rows) && parsed.rows.length>0) return parsed;
+  if(parsed && Array.isArray(parsed.rows) && parsed.rows.length>0) return parsed;
   const text = rec?.companyText || "";
   return parseCompanyPaste(text);
 }
-
 function getParsedEmployeesFromRec(rec){
   const parsed = rec?.parsedEmployees;
   if(parsed && Array.isArray(parsed.employees) && parsed.employees.length>0) return parsed;
@@ -1205,7 +1229,6 @@ function buildResults(){
       }
     }
 
-    // fallback: promedio de KPI semanales (si no capturaste mensual)
     const kpis=[];
     const map = new Map();
     let weeksUsed=0;
@@ -1297,7 +1320,6 @@ function buildResults(){
     monthlyTbody.appendChild(tr);
   });
 
-  // Desglose empresa seleccionada
   const matrixBox = $("companyMatrixBox");
   const recSelM = getMonthlyRec(company);
   const pcSelM = recSelM ? getParsedCompanyFromRec(recSelM) : null;
@@ -1313,7 +1335,6 @@ function buildResults(){
   htmlSel += `<div style="margin-top:10px">${buildWeeklyMatrixHTML(company, bucket)}</div>`;
   matrixBox.innerHTML = htmlSel;
 
-  // Empresa por semanas
   const weeksTbody = $("resWeeksTable").querySelector("tbody");
   weeksTbody.innerHTML="";
   const kpis=[];
@@ -1373,21 +1394,31 @@ function buildResults(){
     weeksTbody.appendChild(tr);
   }
 
-  // KPI mostrado arriba: mensual capturado si existe; si no, promedio semanas
-  const aggSel = aggregateMonthlyConcepts(company);
+  const aggSel = (function(){
+    // reutiliza la misma lógica de aggregateMonthlyConcepts sin duplicar demasiado:
+    const recM = bucket[makeKey(company, "mes")] || null;
+    if(recM){
+      const pcM = getParsedCompanyFromRec(recM);
+      const rowsM = asArray(pcM.rows);
+      if(rowsM.length){
+        return {source:"mensual", kpiMonth: pcM?.totals?.kpi ?? null};
+      }
+    }
+    const avgKpi = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
+    return {source:"semanas", kpiMonth: avgKpi};
+  })();
+
   if(aggSel.source==="mensual"){
     $("resCompanyKpi").textContent = "Mes capturado: " + fmtPct(aggSel.kpiMonth);
   }else{
-    const avgKpi = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
-    $("resCompanyKpi").textContent = hasAny ? ("Promedio semanas: " + fmtPct(avgKpi)) : "";
+    $("resCompanyKpi").textContent = hasAny ? ("Promedio semanas: " + fmtPct(aggSel.kpiMonth)) : "";
   }
 
-  // Ranking empleados
   const viewEmp = $("empWeekView") ? $("empWeekView").value : "mes";
   let empRank=[];
 
   if(viewEmp==="mes"){
-    const recM = getMonthlyRec(company);
+    const recM = bucket[makeKey(company, "mes")] || null;
     if(recM){
       const peM = getParsedEmployeesFromRec(recM);
       const empsM = asArray(peM.employees).filter(e=>e?.calif!=null && isFinite(e.calif));
@@ -1415,7 +1446,6 @@ function buildResults(){
   });
   $("resEmpCount").textContent = empRank.length ? (empRank.length + " empleados") : (viewEmp==="mes" ? "Sin mensual capturado" : "");
 
-  // Comparativo semanal
   const weekFilter = $("cmpWeekFilter") ? $("cmpWeekFilter").value : "all";
   const cmpBody = $("cmpWeekly").querySelector("tbody");
   cmpBody.innerHTML="";
@@ -1444,7 +1474,6 @@ function buildResults(){
     renderWeek(Number(weekFilter));
   }
 
-  // Ranking general
   const viewGlobal = $("globalWeekView") ? $("globalWeekView").value : "mes";
   const gBody = $("globalRank").querySelector("tbody");
   gBody.innerHTML="";
@@ -1454,7 +1483,7 @@ function buildResults(){
   if(viewGlobal==="mes"){
     const list=[];
     for(const c of COMPANIES){
-      const recM = getMonthlyRec(c);
+      const recM = bucket[makeKey(c, "mes")] || null;
       if(!recM) continue;
       const peM = getParsedEmployeesFromRec(recM);
       const empsM = asArray(peM.employees).filter(e=>e?.calif!=null && isFinite(e.calif));
@@ -1485,11 +1514,10 @@ function buildResults(){
     gBody.appendChild(tr);
   });
 
-  // Mejor vendedor por empresa (mes)
   const bestBody = $("bestByCompany").querySelector("tbody");
   bestBody.innerHTML="";
   for(const c of COMPANIES){
-    const recM = getMonthlyRec(c);
+    const recM = bucket[makeKey(c, "mes")] || null;
     let best = null;
 
     if(recM){
@@ -1509,10 +1537,54 @@ function buildResults(){
     bestBody.appendChild(tr);
   }
 
-  renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany});
+  // charts
+  (function(){
+    function aggregateMonthlyConcepts(companyName){
+      const recM = bucket[makeKey(companyName, "mes")] || null;
+      if(recM){
+        const pcM = getParsedCompanyFromRec(recM);
+        const rowsM = asArray(pcM.rows);
+        if(rowsM.length){
+          return {kpiMonth: pcM?.totals?.kpi ?? null};
+        }
+      }
+      const kpis=[];
+      for(let w=1; w<=5; w++){
+        const rec = bucket[makeKey(companyName, String(w))];
+        if(!rec) continue;
+        const pc = getParsedCompanyFromRec(rec);
+        const kpi = pc?.totals?.kpi ?? null;
+        if(kpi!=null && isFinite(kpi)) kpis.push(kpi);
+      }
+      const kpiAvg = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
+      return {kpiMonth:kpiAvg};
+    }
+    function employeeEfficiencyByCompany(companyName){
+      const recM = bucket[makeKey(companyName, "mes")] || null;
+      if(recM){
+        const peM = getParsedEmployeesFromRec(recM);
+        const empsM = asArray(peM.employees).filter(e=>e?.calif!=null && isFinite(e.calif));
+        const sum = empsM.reduce((s,e)=>s+e.calif,0);
+        const count = empsM.length;
+        return {avg: count ? (sum/count) : null, count};
+      }
+      let sum=0, count=0;
+      for(let w=1; w<=5; w++){
+        const rec = bucket[makeKey(companyName, String(w))];
+        if(!rec) continue;
+        const pe = getParsedEmployeesFromRec(rec);
+        const emps = asArray(pe.employees);
+        emps.forEach(e=>{
+          if(e?.calif==null || !isFinite(e.calif)) return;
+          sum += e.calif; count += 1;
+        });
+      }
+      return {avg: count ? (sum/count) : null, count};
+    }
+    renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany});
+  })();
 
-  // Aviso
-  const anyMonthly = COMPANIES.some(c=> !!getMonthlyRec(c));
+  const anyMonthly = COMPANIES.some(c=> !!(bucket[makeKey(c, "mes")]));
   if(!hasAny && !anyMonthly){
     setMsg($("resMsg"), "No hay datos guardados para ese mes. Ve a Datos y guarda semanas o Mensual.", "warn");
     $("resMsg").style.display="block";
@@ -1609,6 +1681,7 @@ function showTab(name){
 </script>
 </body>
 </html>
+
 
 
 
