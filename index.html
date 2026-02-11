@@ -523,17 +523,19 @@ function safeNum(s){
   return isFinite(n) ? n : null;
 }
 
-/** ✅ NUEVO: convierte tokens tipo "6.7%" o "nan%" a número */
-function pctTokenToNumber(token){
-  if(token == null) return null;
-  const t = String(token).trim().toLowerCase();
-  if(t.includes("nan")) return NaN;
-  return safeNum(t);
-}
-
-// ✅ IMPORTANTE: ya NO aplastamos espacios (esto era el bug)
+// ✅ IMPORTANTE: ya NO aplastamos espacios
 function normalizeLine(s){
   return String(s).replace(/\u00a0/g," ").trim();
+}
+
+// ✅ parse de porcentaje que tolera "nan" y valores sin %
+function parsePctAny(s){
+  if(s==null) return null;
+  const str = String(s).trim();
+  if(!str) return null;
+  if(/^nan\b/i.test(str)) return null;
+  const n = safeNum(str);
+  return (n==null || !isFinite(n)) ? null : n;
 }
 
 /** ==============================
@@ -557,26 +559,20 @@ function getBucket(data, year, month){
 function makeKey(company, week){ return company + "||" + week; }
 
 /** ==============================
- *  Parser Empresa (ROBUSTO)
- *  ✅ FIX: si hay nan% => KPI = suma de "Obtenido %"
+ *  ✅ Parser Empresa (FIX NaN + ignora paréntesis)
  *  ============================== */
 function parseCompanyPaste(text){
   const warnings=[], errors=[];
-  const rawText = String(text||"");
-  const rawLines = rawText.split(/\r?\n/).map(normalizeLine).filter(Boolean);
+  const rawLines = String(text||"")
+    .split(/\r?\n/)
+    .map(normalizeLine)
+    .filter(Boolean);
 
   if(rawLines.length===0){
-    return {
-      rows:[],
-      totals:{metaSum:0,obtainedSum:0,kpi:null},
-      warnings,
-      errors:["Pegado de empresa vacío."]
-    };
+    return {rows:[], totals:{metaSum:0,obtainedSum:0,kpi:null}, warnings, errors:["Pegado de empresa vacío."]};
   }
 
-  // ✅ Detecta si en el pegado viene nan%
-  const hasNanInPaste = /nan\s*%/i.test(rawText);
-
+  // Header detect
   let startIdx = rawLines.findIndex(l=>{
     const x=l.toLowerCase();
     return x.includes("concept") && x.includes("meta") && x.includes("obten");
@@ -586,53 +582,91 @@ function parseCompanyPaste(text){
 
   const rows=[];
   let kpiReported=null;
+  let hasNan=false;
 
   for(let i=startIdx;i<rawLines.length;i++){
     const line = rawLines[i];
+    if(/\bnan\b/i.test(line)) hasNan=true;
 
-    const footer = line.match(/^\s*([0-9]+(?:\.[0-9]+)?)\s*%\s+/);
-    if(footer && line.includes("-")){
-      kpiReported = Number(footer[1]);
+    // Si es TSV (copiado de tabla web), es MUCHO más confiable.
+    if(line.includes("\t")){
+      const cells = line.split("\t").map(c=>String(c||"").trim());
+      // Si es header en TSV, sáltalo
+      const c0 = (cells[0]||"").toLowerCase();
+      if(c0.includes("concept") && cells.some(c=>String(c).toLowerCase().includes("meta")) && cells.some(c=>String(c).toLowerCase().includes("obten"))){
+        continue;
+      }
+
+      // Footer típico: última fila sin concepto (a veces queda vacío)
+      if(!cells[0] && cells.some(c=>/\b(nan|[0-9])/.test(String(c)))){
+        const firstPct = cells.map(parsePctAny).find(x=>x!=null && isFinite(x));
+        if(firstPct!=null){ kpiReported = firstPct; }
+        continue;
+      }
+
+      // Data row
+      const concept = (cells[0]||"").trim();
+      if(!concept) continue;
+
+      const metaRaw = cells[1] || "";
+      const obtRaw  = cells[2] || "";
+      const obtPctRaw = cells[3] || "";   // "Obtenido" %
+      const metaPctRaw = cells[4] || "";  // "Meta" % (a veces sin %)
+      const avanceRaw  = cells[5] || cells[cells.length-1] || "";
+
+      const noteMatch = metaRaw.match(/\(([^)]+)\)/);
+      const metaNote = noteMatch ? ("(" + noteMatch[1].trim() + ")") : null;
+
+      const meta = safeNum(metaRaw.replace(/\([^)]*\)/g," "));
+      const obtained = safeNum(obtRaw);
+
+      const obtainedPct = parsePctAny(obtPctRaw);
+      const metaPct = parsePctAny(metaPctRaw);
+      const avance = parsePctAny(avanceRaw);
+
+      rows.push({concept, meta, obtained, avance, metaNote, obtainedPct, metaPct});
+      continue;
+    }
+
+    // ---- fallback "no TSV": regex robusto
+    // Detectar footer: línea sin letras (excepto "nan") con % al inicio
+    const lineNoNanWord = line.replace(/nan/ig,"").trim();
+    const pctTokensFooter = line.replace(/\([^)]*\)/g," ").match(/(?:nan|[0-9]+(?:\.[0-9]+)?)\s*%/gi) || [];
+    if(pctTokensFooter.length && !/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(lineNoNanWord)){
+      // si la primera es número, es KPI reportado; si es nan, solo marcamos hasNan.
+      const first = pctTokensFooter[0];
+      const v = parsePctAny(first);
+      if(v!=null){ kpiReported = v; }
       continue;
     }
 
     const conceptMatch = line.match(/^\s*([A-Za-zÁÉÍÓÚÑáéíóúñ][^0-9]*)\s+/);
     if(!conceptMatch) continue;
+
     const concept = conceptMatch[1].trim();
     if(!concept) continue;
 
     const afterConcept = line.slice(conceptMatch[0].length);
 
+    // meta note (ej: 0.0 (70%))
     const metaMatch = afterConcept.match(/^([0-9]+(?:\.[0-9]+)?)\s*(\([^)]+\))?/);
     const meta = metaMatch ? safeNum(metaMatch[1]) : null;
     const metaNote = metaMatch && metaMatch[2] ? metaMatch[2].trim() : null;
 
-    const nums = afterConcept.match(/[0-9]+(?:\.[0-9]+)?/g) || [];
+    // ✅ IMPORTANTÍSIMO: quitamos paréntesis ANTES de sacar números
+    const afterNoParens = afterConcept.replace(/\([^)]*\)/g," ");
+    const nums = afterNoParens.match(/[0-9]+(?:\.[0-9]+)?/g) || [];
     const metaFromNums = nums.length>=1 ? safeNum(nums[0]) : meta;
     const obtained = nums.length>=2 ? safeNum(nums[1]) : null;
 
-    /**
-     * ✅ NUEVO:
-     * - sacamos el "Obtenido %" (primera % de la fila, ignorando notas tipo (70%))
-     * - y el "Avance" lo tomamos como la última % (también ignorando notas)
-     */
-    let lineForPct = line;
-
-    // quita la nota meta "(70%)" si venía detectada
-    if(metaNote) lineForPct = lineForPct.replace(metaNote, "");
-
-    // quita cualquier nota tipo "(70%)" aunque no haya sido detectada
-    lineForPct = lineForPct.replace(/\(\s*(?:nan|[0-9]+(?:\.[0-9]+)?)\s*%\s*\)/gi, "");
-
-    const pctTokens = (lineForPct.match(/(?:nan|[0-9]+(?:\.[0-9]+)?)\s*%/gi) || []);
-
-    const obtainedPct = pctTokens.length ? pctTokenToNumber(pctTokens[0]) : null;
-
-    let avance = null;
+    // Porcentajes: quitamos paréntesis para que (70%) NO se vuelva "Obtenido%"
+    const lineNoParens = line.replace(/\([^)]*\)/g," ");
+    const pctTokens = lineNoParens.match(/(?:nan|[0-9]+(?:\.[0-9]+)?)\s*%/gi) || [];
+    let obtainedPct=null;
+    let avance=null;
     if(pctTokens.length){
-      const last = pctTokens[pctTokens.length-1];
-      const v = pctTokenToNumber(last);
-      avance = (v!=null && isFinite(v)) ? v : null;
+      obtainedPct = parsePctAny(pctTokens[0]);                 // Obtenido%
+      avance = parsePctAny(pctTokens[pctTokens.length-1]);     // Avance%
     }
 
     rows.push({concept, meta: metaFromNums ?? meta, obtained, avance, metaNote, obtainedPct});
@@ -642,22 +676,35 @@ function parseCompanyPaste(text){
 
   const metaSum = rows.reduce((a,r)=>a+(r.meta||0),0);
   const obtainedSum = rows.reduce((a,r)=>a+(r.obtained||0),0);
+
+  // KPI alternativo: suma de "Obtenido%" (columna de la derecha)
+  const sumObtPct = rows.reduce((a,r)=>a+((r.obtainedPct!=null && isFinite(r.obtainedPct)) ? r.obtainedPct : 0),0);
+  const hasAnyObtPct = rows.some(r=>r.obtainedPct!=null && isFinite(r.obtainedPct));
+
   const kpiCalc = metaSum>0 ? (obtainedSum/metaSum)*100 : null;
 
-  // KPI base (como antes)
-  let kpi = (kpiReported!=null) ? kpiReported : kpiCalc;
-  if(kpiReported==null) warnings.push("No detecté KPI reportado (footer). Usaré KPI calculado.");
+  // ✅ REGLA QUE PEDISTE:
+  // Si hay nan en el pegado -> KPI = suma de Obtenido%
+  // Si NO hay nan -> KPI = el reportado si existe; si no, KPI calculado tradicional (como antes)
+  let kpi = null;
+  let kpiMode = "calc_ratio";
 
-  // ✅ FIX solicitado: solo si hay nan% => KPI = suma de "Obtenido %"
-  const obtainedPctSum = rows.reduce((s,r)=> s + (isFinite(r.obtainedPct) ? r.obtainedPct : 0), 0);
-  const foundObtPct = rows.some(r => r.obtainedPct != null && isFinite(r.obtainedPct));
-
-  if(hasNanInPaste && foundObtPct){
-    kpi = obtainedPctSum;
-    warnings.push("Detecté 'nan%'. KPI = suma de 'Obtenido %'.");
+  if(kpiReported!=null && isFinite(kpiReported)){
+    kpi = kpiReported;
+    kpiMode = "reported";
+  }else if(hasNan && hasAnyObtPct){
+    kpi = sumObtPct;
+    kpiMode = "sum_obtenido_pct_nan";
+  }else{
+    kpi = kpiCalc;
+    if(kpiReported==null) warnings.push("No detecté KPI reportado (footer). Usaré KPI calculado.");
   }
 
-  return { rows, totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported}, warnings, errors };
+  return {
+    rows,
+    totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported, sumObtPct, kpiMode, hasNan},
+    warnings, errors
+  };
 }
 
 /** ==============================
@@ -797,9 +844,9 @@ function preview(){
     const tr=document.createElement("tr");
     tr.innerHTML = `
       <td>${r.concept}</td>
-      <td class="num">${r.meta==null?"—":(r.meta.toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
-      <td class="num">${r.obtained==null?"—":r.obtained.toFixed(2)}</td>
-      <td class="num">${r.avance==null?"—":r.avance.toFixed(2)+"%"}</td>
+      <td class="num">${r.meta==null?"—":(Number(r.meta).toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
+      <td class="num">${r.obtained==null?"—":Number(r.obtained).toFixed(2)}</td>
+      <td class="num">${r.avance==null?"—":Number(r.avance).toFixed(2)+"%"}</td>
     `;
     tb.appendChild(tr);
   });
@@ -1229,6 +1276,7 @@ function buildResults(){
       }
     }
 
+    // fallback: promedio de KPI semanales (si no capturaste mensual)
     const kpis=[];
     const map = new Map();
     let weeksUsed=0;
@@ -1320,6 +1368,7 @@ function buildResults(){
     monthlyTbody.appendChild(tr);
   });
 
+  // Desglose empresa seleccionada
   const matrixBox = $("companyMatrixBox");
   const recSelM = getMonthlyRec(company);
   const pcSelM = recSelM ? getParsedCompanyFromRec(recSelM) : null;
@@ -1335,6 +1384,7 @@ function buildResults(){
   htmlSel += `<div style="margin-top:10px">${buildWeeklyMatrixHTML(company, bucket)}</div>`;
   matrixBox.innerHTML = htmlSel;
 
+  // Empresa por semanas (igual)
   const weeksTbody = $("resWeeksTable").querySelector("tbody");
   weeksTbody.innerHTML="";
   const kpis=[];
@@ -1394,31 +1444,21 @@ function buildResults(){
     weeksTbody.appendChild(tr);
   }
 
-  const aggSel = (function(){
-    // reutiliza la misma lógica de aggregateMonthlyConcepts sin duplicar demasiado:
-    const recM = bucket[makeKey(company, "mes")] || null;
-    if(recM){
-      const pcM = getParsedCompanyFromRec(recM);
-      const rowsM = asArray(pcM.rows);
-      if(rowsM.length){
-        return {source:"mensual", kpiMonth: pcM?.totals?.kpi ?? null};
-      }
-    }
-    const avgKpi = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
-    return {source:"semanas", kpiMonth: avgKpi};
-  })();
-
+  // KPI mostrado arriba: si hay mensual capturado, úsalo; si no, promedio semanas
+  const aggSel = aggregateMonthlyConcepts(company);
   if(aggSel.source==="mensual"){
     $("resCompanyKpi").textContent = "Mes capturado: " + fmtPct(aggSel.kpiMonth);
   }else{
-    $("resCompanyKpi").textContent = hasAny ? ("Promedio semanas: " + fmtPct(aggSel.kpiMonth)) : "";
+    const avgKpi = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
+    $("resCompanyKpi").textContent = hasAny ? ("Promedio semanas: " + fmtPct(avgKpi)) : "";
   }
 
+  // Ranking empleados: Mes = del pegado mensual si existe; Semana = semanal
   const viewEmp = $("empWeekView") ? $("empWeekView").value : "mes";
   let empRank=[];
 
   if(viewEmp==="mes"){
-    const recM = bucket[makeKey(company, "mes")] || null;
+    const recM = getMonthlyRec(company);
     if(recM){
       const peM = getParsedEmployeesFromRec(recM);
       const empsM = asArray(peM.employees).filter(e=>e?.calif!=null && isFinite(e.calif));
@@ -1426,7 +1466,7 @@ function buildResults(){
         .map(e=>({name:e.name, avg:e.calif, weeks:1}))
         .sort((a,b)=>b.avg-a.avg);
     }else{
-      empRank = [];
+      empRank = []; // sin mensual capturado
     }
   }else{
     const rec = bucket[makeKey(company, String(viewEmp))];
@@ -1446,6 +1486,7 @@ function buildResults(){
   });
   $("resEmpCount").textContent = empRank.length ? (empRank.length + " empleados") : (viewEmp==="mes" ? "Sin mensual capturado" : "");
 
+  // Comparativo semanal (igual)
   const weekFilter = $("cmpWeekFilter") ? $("cmpWeekFilter").value : "all";
   const cmpBody = $("cmpWeekly").querySelector("tbody");
   cmpBody.innerHTML="";
@@ -1474,6 +1515,7 @@ function buildResults(){
     renderWeek(Number(weekFilter));
   }
 
+  // Ranking general: Mes = de los mensuales capturados por empresa
   const viewGlobal = $("globalWeekView") ? $("globalWeekView").value : "mes";
   const gBody = $("globalRank").querySelector("tbody");
   gBody.innerHTML="";
@@ -1483,7 +1525,7 @@ function buildResults(){
   if(viewGlobal==="mes"){
     const list=[];
     for(const c of COMPANIES){
-      const recM = bucket[makeKey(c, "mes")] || null;
+      const recM = getMonthlyRec(c);
       if(!recM) continue;
       const peM = getParsedEmployeesFromRec(recM);
       const empsM = asArray(peM.employees).filter(e=>e?.calif!=null && isFinite(e.calif));
@@ -1514,10 +1556,11 @@ function buildResults(){
     gBody.appendChild(tr);
   });
 
+  // Mejor vendedor por empresa (mes): usa mensual capturado
   const bestBody = $("bestByCompany").querySelector("tbody");
   bestBody.innerHTML="";
   for(const c of COMPANIES){
-    const recM = bucket[makeKey(c, "mes")] || null;
+    const recM = getMonthlyRec(c);
     let best = null;
 
     if(recM){
@@ -1537,54 +1580,10 @@ function buildResults(){
     bestBody.appendChild(tr);
   }
 
-  // charts
-  (function(){
-    function aggregateMonthlyConcepts(companyName){
-      const recM = bucket[makeKey(companyName, "mes")] || null;
-      if(recM){
-        const pcM = getParsedCompanyFromRec(recM);
-        const rowsM = asArray(pcM.rows);
-        if(rowsM.length){
-          return {kpiMonth: pcM?.totals?.kpi ?? null};
-        }
-      }
-      const kpis=[];
-      for(let w=1; w<=5; w++){
-        const rec = bucket[makeKey(companyName, String(w))];
-        if(!rec) continue;
-        const pc = getParsedCompanyFromRec(rec);
-        const kpi = pc?.totals?.kpi ?? null;
-        if(kpi!=null && isFinite(kpi)) kpis.push(kpi);
-      }
-      const kpiAvg = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
-      return {kpiMonth:kpiAvg};
-    }
-    function employeeEfficiencyByCompany(companyName){
-      const recM = bucket[makeKey(companyName, "mes")] || null;
-      if(recM){
-        const peM = getParsedEmployeesFromRec(recM);
-        const empsM = asArray(peM.employees).filter(e=>e?.calif!=null && isFinite(e.calif));
-        const sum = empsM.reduce((s,e)=>s+e.calif,0);
-        const count = empsM.length;
-        return {avg: count ? (sum/count) : null, count};
-      }
-      let sum=0, count=0;
-      for(let w=1; w<=5; w++){
-        const rec = bucket[makeKey(companyName, String(w))];
-        if(!rec) continue;
-        const pe = getParsedEmployeesFromRec(rec);
-        const emps = asArray(pe.employees);
-        emps.forEach(e=>{
-          if(e?.calif==null || !isFinite(e.calif)) return;
-          sum += e.calif; count += 1;
-        });
-      }
-      return {avg: count ? (sum/count) : null, count};
-    }
-    renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany});
-  })();
+  renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany});
 
-  const anyMonthly = COMPANIES.some(c=> !!(bucket[makeKey(c, "mes")]));
+  // Aviso
+  const anyMonthly = COMPANIES.some(c=> !!getMonthlyRec(c));
   if(!hasAny && !anyMonthly){
     setMsg($("resMsg"), "No hay datos guardados para ese mes. Ve a Datos y guarda semanas o Mensual.", "warn");
     $("resMsg").style.display="block";
@@ -1681,6 +1680,8 @@ function showTab(name){
 </script>
 </body>
 </html>
+
+
 
 
 
