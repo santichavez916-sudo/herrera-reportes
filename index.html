@@ -513,1730 +513,39 @@ const CFG_KEY = "herrera_cfg_v1";
 function $(id){ return document.getElementById(id); }
 function fmtPct(n){
   if(n==null || !isFinite(n)) return "—";
-  return n.toFixed(2) + "%";
-}
-function safeNum(s){
-  if(s==null) return null;
-  const t = String(s).replace(/,/g,"").replace(/[^\d.\-]/g,"").trim();
-  if(!t) return null;
-  const n = Number(t);
-  return isFinite(n) ? n : null;
+  return Number(n).toFixed(2) + "%";
 }
 
-/** ✅ NUEVO: convierte tokens tipo "6.7%" o "nan%" a número */
-function pctTokenToNumber(token){
-  if(token == null) return null;
-  const t = String(token).trim().toLowerCase();
-  if(t.includes("nan")) return NaN;
-  return safeNum(t);
-}
-
-// ✅ IMPORTANTE: ya NO aplastamos espacios (esto era el bug)
-function normalizeLine(s){
-  return String(s).replace(/\u00a0/g," ").trim();
-}
-
-/** ==============================
- *  Modelo de datos guardado
- *  data[year][month][key(company||week)] = record
- *  ============================== */
-function loadData(){
-  try{
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
-  }catch(e){ return {}; }
-}
-function saveData(obj){
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(obj));
-}
-function getBucket(data, year, month){
-  data[year] ??= {};
-  data[year][month] ??= {};
-  return data[year][month];
-}
-function makeKey(company, week){ return company + "||" + week; }
-
-/** ==============================
- *  Parser Empresa (ROBUSTO)
- *  ✅ FIX: si hay nan% => KPI = suma de "Obtenido %"
- *  ============================== */
-function parseCompanyPaste(text){
-  const warnings=[], errors=[];
-  const rawText = String(text||"");
-  const rawLines = rawText.split(/\r?\n/).map(normalizeLine).filter(Boolean);
-
-  if(rawLines.length===0){
-    return {
-      rows:[],
-      totals:{metaSum:0,obtainedSum:0,kpi:null},
-      warnings,
-      errors:["Pegado de empresa vacío."]
-    };
-  }
-
-  // ✅ Detecta si en el pegado viene nan%
-  const hasNanInPaste = /nan\s*%/i.test(rawText);
-
-  let startIdx = rawLines.findIndex(l=>{
-    const x=l.toLowerCase();
-    return x.includes("concept") && x.includes("meta") && x.includes("obten");
-  });
-  if(startIdx===-1){ warnings.push("No detecté header exacto; intentaré parsear igual."); startIdx=0; }
-  else startIdx += 1;
-
-  const rows=[];
-  let kpiReported=null;
-
-  for(let i=startIdx;i<rawLines.length;i++){
-    const line = rawLines[i];
-
-    const footer = line.match(/^\s*([0-9]+(?:\.[0-9]+)?)\s*%\s+/);
-    if(footer && line.includes("-")){
-      kpiReported = Number(footer[1]);
-      continue;
-    }
-
-    const conceptMatch = line.match(/^\s*([A-Za-zÁÉÍÓÚÑáéíóúñ][^0-9]*)\s+/);
-    if(!conceptMatch) continue;
-    const concept = conceptMatch[1].trim();
-    if(!concept) continue;
-
-    const afterConcept = line.slice(conceptMatch[0].length);
-
-    const metaMatch = afterConcept.match(/^([0-9]+(?:\.[0-9]+)?)\s*(\([^)]+\))?/);
-    const meta = metaMatch ? safeNum(metaMatch[1]) : null;
-    const metaNote = metaMatch && metaMatch[2] ? metaMatch[2].trim() : null;
-
-    const nums = afterConcept.match(/[0-9]+(?:\.[0-9]+)?/g) || [];
-    const metaFromNums = nums.length>=1 ? safeNum(nums[0]) : meta;
-    const obtained = nums.length>=2 ? safeNum(nums[1]) : null;
-
-    /**
-     * ✅ NUEVO:
-     * - sacamos el "Obtenido %" (primera % de la fila, ignorando notas tipo (70%))
-     * - y el "Avance" lo tomamos como la última % (también ignorando notas)
-     */
-    let lineForPct = line;
-
-    // quita la nota meta "(70%)" si venía detectada
-    if(metaNote) lineForPct = lineForPct.replace(metaNote, "");
-
-    // quita cualquier nota tipo "(70%)" aunque no haya sido detectada
-    lineForPct = lineForPct.replace(/\(\s*(?:nan|[0-9]+(?:\.[0-9]+)?)\s*%\s*\)/gi, "");
-
-    const pctTokens = (lineForPct.match(/(?:nan|[0-9]+(?:\.[0-9]+)?)\s*%/gi) || []);
-
-    const obtainedPct = pctTokens.length ? pctTokenToNumber(pctTokens[0]) : null;
-
-    let avance = null;
-    if(pctTokens.length){
-      const last = pctTokens[pctTokens.length-1];
-      const v = pctTokenToNumber(last);
-      avance = (v!=null && isFinite(v)) ? v : null;
-    }
-
-    rows.push({concept, meta: metaFromNums ?? meta, obtained, avance, metaNote, obtainedPct});
-  }
-
-  if(rows.length===0) errors.push("No detecté filas de conceptos. Revisa el pegado.");
-
-  const metaSum = rows.reduce((a,r)=>a+(r.meta||0),0);
-  const obtainedSum = rows.reduce((a,r)=>a+(r.obtained||0),0);
-  const kpiCalc = metaSum>0 ? (obtainedSum/metaSum)*100 : null;
-
-  // KPI base (como antes)
-  let kpi = (kpiReported!=null) ? kpiReported : kpiCalc;
-  if(kpiReported==null) warnings.push("No detecté KPI reportado (footer). Usaré KPI calculado.");
-
-  // ✅ FIX solicitado: solo si hay nan% => KPI = suma de "Obtenido %"
-  const obtainedPctSum = rows.reduce((s,r)=> s + (isFinite(r.obtainedPct) ? r.obtainedPct : 0), 0);
-  const foundObtPct = rows.some(r => r.obtainedPct != null && isFinite(r.obtainedPct));
-
-  if(hasNanInPaste && foundObtPct){
-    kpi = obtainedPctSum;
-    warnings.push("Detecté 'nan%'. KPI = suma de 'Obtenido %'.");
-  }
-
-  return { rows, totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported}, warnings, errors };
-}
-
-/** ==============================
- *  Parser Empleados (calif directo)
- *  ============================== */
-function parseEmployeesPaste(text){
-  const warnings=[], errors=[];
-  const lines = String(text||"").split(/\r?\n/).map(normalizeLine).filter(Boolean);
-  if(lines.length===0) return {employees:[], warnings, errors:["Pegado de empleados vacío."]};
-
-  const starts=[];
-  for(let i=0;i<lines.length;i++){
-    if(/^agenda:\s*\d+/i.test(lines[i])) starts.push(i);
-  }
-  if(starts.length===0) return {employees:[], warnings, errors:["No encontré bloques que empiecen con 'Agenda:'"]};
-
-  const employees=[];
-  for(let s=0;s<starts.length;s++){
-    const start=starts[s];
-    const end=(s+1<starts.length)?starts[s+1]:lines.length;
-    const block=lines.slice(start,end);
-
-    const agenda = Number((block[0].match(/^agenda:\s*(\d+)/i)||[])[1] || NaN);
-    const agendaVal = isFinite(agenda)?agenda:null;
-
-    let name="SIN NOMBRE";
-    for(let i=1;i<Math.min(block.length,10);i++){
-      const l=block[i];
-      if(/^calificacion\s+obtenida/i.test(l)) continue;
-      if(/^concepto\b/i.test(l)) continue;
-      if(/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(l) && !/:/.test(l)){
-        name=l; break;
-      }
-    }
-
-    let calif=null;
-    for(const l of block){
-      const m=l.match(/^calificacion\s+obtenida:\s*([0-9]+(?:\.[0-9]+)?)\s*%/i);
-      if(m){ calif=Number(m[1]); break; }
-    }
-
-    employees.push({name, agenda:agendaVal, calif});
-  }
-
-  const valid = employees.filter(e=>e.name!=="SIN NOMBRE" && e.calif!=null).length;
-  if(valid===0) errors.push("No detecté empleados válidos (nombre+calificación). Revisa el pegado.");
-
-  return { employees, warnings, errors };
-}
-
-function topEmployees(employees, n=5){
-  return [...employees].filter(e=>e.calif!=null).sort((a,b)=>(b.calif||-1)-(a.calif||-1)).slice(0,n);
-}
-
-/** ==============================
- *  UI helpers
- *  ============================== */
-function setMsg(el, text, type){
-  if(!text){ el.style.display="none"; el.textContent=""; el.className="msg"; return; }
-  el.style.display="block";
-  el.textContent=text;
-  el.className="msg " + (type||"");
-}
-function fillCompanies(selectEl){
-  selectEl.innerHTML = "";
-  for(const c of COMPANIES){
-    const opt=document.createElement("option");
-    opt.value=c; opt.textContent=c;
-    selectEl.appendChild(opt);
-  }
-}
-function currentKeyFromInputs(){
-  const company = $("companySelect").value;
-  const year = String($("yearInput").value||"");
-  const month = String($("monthInput").value||"");
-  const week = String($("weekSelect").value||"");
-  return {company, year, month, week};
-}
-
-/** ==============================
- *  Mode (admin/viewer)
- *  ============================== */
-function loadCfg(){
-  try{ return JSON.parse(localStorage.getItem(CFG_KEY) || "{}"); }catch(e){ return {}; }
-}
-function saveCfg(cfg){
-  localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
-}
-function applyMode(){
-  const cfg = loadCfg();
-  const mode = cfg.mode || "admin";
-  $("modeSelect").value = mode;
-  $("modePin").value = cfg.pin || "";
-  $("modePill").textContent = "Modo: " + (mode==="admin" ? "Admin" : "Viewer");
-  const isAdmin = mode==="admin";
-  $("btnSave").disabled = !isAdmin;
-  $("btnClearAll").disabled = !isAdmin;
-  $("btnClearWeek").disabled = !isAdmin;
-  $("pasteCompany").disabled = !isAdmin;
-  $("pasteEmployees").disabled = !isAdmin;
-  $("weekStart").disabled = !isAdmin;
-  $("weekEnd").disabled = !isAdmin;
-}
-
-/** ==============================
- *  Datos tab actions
- *  ============================== */
-function preview(){
-  const pc = $("pasteCompany").value;
-  const pe = $("pasteEmployees").value;
-
-  const c = parseCompanyPaste(pc);
-  const e = parseEmployeesPaste(pe);
-
-  $("previewArea").style.display="block";
-
-  setMsg($("companyPreviewMsg"), c.errors[0] || c.warnings[0] || "", c.errors.length?"bad":(c.warnings.length?"warn":"ok"));
-  setMsg($("empPreviewMsg"), e.errors[0] || e.warnings[0] || "", e.errors.length?"bad":(e.warnings.length?"warn":"ok"));
-
-  const kpiWrap = $("companyKpis");
-  kpiWrap.innerHTML="";
-  const boxes = [
-    ["KPI usado", fmtPct(c.totals.kpi)],
-    ["Meta sum", (c.totals.metaSum||0).toFixed(2)],
-    ["Obtenido sum", (c.totals.obtainedSum||0).toFixed(2)],
-  ];
-  boxes.forEach(([t,v])=>{
-    const d=document.createElement("div");
-    d.className="box";
-    d.innerHTML=`<div class="t">${t}</div><div class="v">${v}</div>`;
-    kpiWrap.appendChild(d);
-  });
-
-  const tb = $("companyTable").querySelector("tbody");
-  tb.innerHTML="";
-  c.rows.forEach(r=>{
-    const tr=document.createElement("tr");
-    tr.innerHTML = `
-      <td>${r.concept}</td>
-      <td class="num">${r.meta==null?"—":(r.meta.toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
-      <td class="num">${r.obtained==null?"—":r.obtained.toFixed(2)}</td>
-      <td class="num">${r.avance==null?"—":r.avance.toFixed(2)+"%"}</td>
-    `;
-    tb.appendChild(tr);
-  });
-
-  $("empCount").textContent = e.employees.length ? (e.employees.length + " empleados") : "";
-  const top = topEmployees(e.employees,5);
-  const topWrap = $("top5");
-  topWrap.innerHTML="";
-  top.forEach((x,i)=>{
-    const d=document.createElement("div");
-    d.className="msg";
-    d.innerHTML = `<b>${i+1})</b> ${x.name} <span class="pill" style="float:right">${fmtPct(x.calif)} · Agenda ${x.agenda??"—"}</span>`;
-    topWrap.appendChild(d);
-  });
-
-  const etb = $("empTable").querySelector("tbody");
-  etb.innerHTML="";
-  e.employees.forEach(x=>{
-    const tr=document.createElement("tr");
-    tr.innerHTML = `
-      <td>${x.name}</td>
-      <td class="num">${x.agenda??"—"}</td>
-      <td class="num">${fmtPct(x.calif)}</td>
-    `;
-    etb.appendChild(tr);
-  });
-
-  return {c,e};
-}
-
-function saveWeek(){
-  const cfg=loadCfg();
-  if((cfg.mode||"admin")!=="admin"){
-    setMsg($("msgTop"), "Estás en modo Viewer. Cambia a Admin en Config para guardar.", "warn");
-    return;
-  }
-
-  const {company, year, month, week} = currentKeyFromInputs();
-
-  const start = $("weekStart").value || "";
-  const end = $("weekEnd").value || "";
-
-  const pc = $("pasteCompany").value;
-  const pe = $("pasteEmployees").value;
-
-  const parsedCompany = parseCompanyPaste(pc);
-  const parsedEmployees = parseEmployeesPaste(pe);
-
-  const data = loadData();
-  const bucket = getBucket(data, year, month);
-
-  bucket[makeKey(company, week)] = {
-    company, year, month, week,
-    start, end,
-    companyText: pc,
-    employeeText: pe,
-    parsedCompany,
-    parsedEmployees,
-    savedAt: new Date().toISOString()
-  };
-
-  saveData(data);
-
-  const label = (week==="mes") ? "Mensual" : ("Semana " + week);
-  setMsg($("msgTop"), `Guardado ✅ ${company} | ${year}-${month} ${label}`, "ok");
-}
-
-function loadWeek(){
-  const {company, year, month, week} = currentKeyFromInputs();
-  const data = loadData();
-  const bucket = (((data||{})[year]||{})[month]||{});
-  const rec = bucket[makeKey(company, week)];
-  if(!rec){
-    setMsg($("msgTop"), "No hay datos guardados para esa empresa/selección.", "warn");
-    return;
-  }
-  $("weekStart").value = rec.start || "";
-  $("weekEnd").value = rec.end || "";
-  $("pasteCompany").value = rec.companyText || "";
-  $("pasteEmployees").value = rec.employeeText || "";
-
-  const label = (week==="mes") ? "Mensual" : ("Semana " + week);
-  setMsg($("msgTop"), `Cargado ✅ ${company} | ${year}-${month} ${label}`, "ok");
-}
-
-function clearWeekInputs(){
-  const cfg=loadCfg();
-  if((cfg.mode||"admin")!=="admin") return;
-  $("weekStart").value="";
-  $("weekEnd").value="";
-  $("pasteCompany").value="";
-  $("pasteEmployees").value="";
-  $("previewArea").style.display="none";
-  setMsg($("msgTop"), "Limpio ✅", "ok");
-}
-
-function exportJSON(){
-  const data = loadData();
-  const blob = new Blob([JSON.stringify(data,null,2)], {type:"application/json"});
-  const a=document.createElement("a");
-  a.href=URL.createObjectURL(blob);
-  a.download="herrera-reportes.json";
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-
-function importJSON(file){
-  const reader=new FileReader();
-  reader.onload=()=>{
-    try{
-      const obj=JSON.parse(reader.result);
-      saveData(obj);
-      setMsg($("msgTop"), "Importado ✅ (recarga Resultados para ver cambios)", "ok");
-    }catch(e){
-      setMsg($("msgTop"), "Ese archivo no es JSON válido.", "bad");
-    }
-  };
-  reader.readAsText(file);
-}
-
-function clearAll(){
-  const cfg=loadCfg();
-  if((cfg.mode||"admin")!=="admin"){
-    setMsg($("msgTop"), "Modo Viewer no puede borrar.", "warn");
-    return;
-  }
-  if(!confirm("¿Seguro que quieres borrar TODO lo guardado en este navegador?")) return;
-  localStorage.removeItem(STORAGE_KEY);
-  setMsg($("msgTop"), "Borrado local ✅", "ok");
-}
-
-/** Abrir/cerrar todos los desgloses mensuales */
-function setMonthlyBreakdowns(open){
-  const table = document.getElementById("cmpMonthly");
-  if(!table) return;
-  const details = table.querySelectorAll("details");
-  details.forEach(d => { d.open = !!open; });
-}
-
-/** ==============================
- *  ✅ GRAFICAS
- *  ============================== */
-let CHART_RANKING = null;
-let CHART_EFF = null;
-
-function destroyChart(ch){
-  if(ch && typeof ch.destroy === "function") ch.destroy();
-}
-function colorByEfficiency(pct){
-  if(pct==null || !isFinite(pct)) return "#9ca3af";
-  if(pct >= 70) return "#16a34a";
-  if(pct >= 40) return "#f59e0b";
-  return "#dc2626";
-}
-
-function renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany}){
-  const rankData = COMPANIES.map(c=>{
-    const kpi = aggregateMonthlyConcepts(c).kpiMonth;
-    return {company:c, value:(kpi!=null && isFinite(kpi))?kpi:0, has:(kpi!=null && isFinite(kpi))};
-  }).sort((a,b)=>b.value-a.value);
-
-  const effData = COMPANIES.map(c=>{
-    const {avg, count} = employeeEfficiencyByCompany(c);
-    const v = (avg!=null && isFinite(avg)) ? avg : 0;
-    const has = (avg!=null && isFinite(avg)) && count>0;
-    return {company:c, value:v, has};
-  }).sort((a,b)=>b.value-a.value);
-
-  const c1 = document.getElementById("chartRankingKPI");
-  const c2 = document.getElementById("chartEfficiencyArea");
-  if(!c1 || !c2 || typeof Chart==="undefined") return;
-
-  destroyChart(CHART_RANKING);
-  destroyChart(CHART_EFF);
-
-  CHART_RANKING = new Chart(c1, {
-    type: "bar",
-    data: {
-      labels: rankData.map(x=>x.company),
-      datasets: [{
-        label: "KPI% mes",
-        data: rankData.map(x=>x.value),
-        backgroundColor: rankData.map(x=> x.has ? "#111827" : "#9ca3af")
-      }]
-    },
-    options: {
-      indexAxis: "y",
-      responsive: true,
-      plugins: {
-        legend: { display: true },
-        tooltip: { callbacks: { label: (ctx)=> `KPI%: ${Number(ctx.raw).toFixed(2)}%` } }
-      },
-      scales: {
-        x: { beginAtZero:true, max:100, ticks:{ callback:(v)=> v+"%" } }
-      }
-    }
-  });
-
-  CHART_EFF = new Chart(c2, {
-    type: "bar",
-    data: {
-      labels: effData.map(x=>x.company),
-      datasets: [{
-        label: "Eficiencia empleados% (promedio)",
-        data: effData.map(x=>x.value),
-        backgroundColor: effData.map(x=> x.has ? colorByEfficiency(x.value) : "#9ca3af")
-      }]
-    },
-    options: {
-      indexAxis: "y",
-      responsive: true,
-      plugins: {
-        legend: { display: true },
-        tooltip: { callbacks: { label: (ctx)=> `Eficiencia: ${Number(ctx.raw).toFixed(2)}%` } }
-      },
-      scales: {
-        x: { beginAtZero:true, max:100, ticks:{ callback:(v)=> v+"%" } }
-      }
-    }
-  });
-}
-
-/** ==============================
- *  Helpers Resultados
- *  ============================== */
-const asArray = (x)=> Array.isArray(x) ? x : [];
-
-function getParsedCompanyFromRec(rec){
-  const parsed = rec?.parsedCompany;
-  if(parsed && Array.isArray(parsed.rows) && parsed.rows.length>0) return parsed;
-  const text = rec?.companyText || "";
-  return parseCompanyPaste(text);
-}
-function getParsedEmployeesFromRec(rec){
-  const parsed = rec?.parsedEmployees;
-  if(parsed && Array.isArray(parsed.employees) && parsed.employees.length>0) return parsed;
-  const text = rec?.employeeText || "";
-  return parseEmployeesPaste(text);
-}
-
-function buildMonthlyCompanyTableHTML(pc){
-  const rows = asArray(pc?.rows);
-  if(!rows.length) return `<div class="msg warn">No hay tabla mensual de empresa.</div>`;
-
-  return `
-    <div class="msg ok">Mensual capturado · KPI: <b>${fmtPct(pc?.totals?.kpi)}</b></div>
-    <div style="margin-top:10px;max-height:340px;overflow:auto;border:1px solid var(--border);border-radius:12px">
-      <table>
-        <thead>
-          <tr>
-            <th>Concepto</th>
-            <th class="right">Meta</th>
-            <th class="right">Obtenido</th>
-            <th class="right">Avance%</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.map(r=>`
-            <tr>
-              <td>${r.concept}</td>
-              <td class="num">${r.meta==null?"—":(Number(r.meta).toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
-              <td class="num">${r.obtained==null?"—":Number(r.obtained).toFixed(2)}</td>
-              <td class="num">${r.avance==null?"—":Number(r.avance).toFixed(2)+"%"}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-    </div>
-  `;
-}
-
-function buildWeeklyMatrixHTML(companyName, bucket){
-  const conceptsOrder = ["Afluencia","Citas","Avaluos","Avalúos","Demos","Solicitudes","Aprobados","Ventas","Entregas"];
-  const conceptMap = new Map();
-
-  function normConcept(c){
-    if(!c) return "";
-    return String(c).trim().toLowerCase()
-      .replace(/á/g,"a").replace(/é/g,"e").replace(/í/g,"i").replace(/ó/g,"o").replace(/ú/g,"u");
-  }
-
-  const weekKpis = [];
-  for(let w=1; w<=5; w++){
-    const rec = bucket[makeKey(companyName, String(w))];
-    if(!rec) continue;
-    const pc = getParsedCompanyFromRec(rec);
-    const rows = asArray(pc.rows);
-    if(rows.length===0) continue;
-
-    const kpi = pc?.totals?.kpi ?? null;
-    if(kpi!=null && isFinite(kpi)) weekKpis.push({w, kpi});
-
-    for(const r of rows){
-      const key = normConcept(r.concept);
-      if(!key) continue;
-      if(!conceptMap.has(key)){
-        conceptMap.set(key, {label:r.concept, weeks:{}, metaMonth:0, obtMonth:0});
-      }
-      const obj = conceptMap.get(key);
-      obj.weeks[w] = {meta:r.meta??null, obt:r.obtained??null, av:r.avance??null, note:r.metaNote||null};
-      obj.metaMonth += (r.meta||0);
-      obj.obtMonth += (r.obtained||0);
-    }
-  }
-
-  if(conceptMap.size===0){
-    return `<div class="msg warn">Sin semanas guardadas para construir matriz.</div>`;
-  }
-
-  const keys = [...conceptMap.keys()];
-  keys.sort((a,b)=>{
-    const ia = conceptsOrder.map(normConcept).indexOf(a);
-    const ib = conceptsOrder.map(normConcept).indexOf(b);
-    const aa = ia===-1 ? 999 : ia;
-    const bb = ib===-1 ? 999 : ib;
-    if(aa!==bb) return aa-bb;
-    return (conceptMap.get(a).label||"").localeCompare(conceptMap.get(b).label||"");
-  });
-
-  const weekCols = [1,2,3,4,5];
-  const avgMonth = weekKpis.length ? (weekKpis.reduce((s,x)=>s+x.kpi,0)/weekKpis.length) : null;
-
-  const headWeek = (w)=>`<th colspan="3" class="right">Semana ${w}</th>`;
-  const subHead = (label)=>`<th class="right">${label}</th>`;
-
-  const rowsHtml = keys.map(k=>{
-    const c = conceptMap.get(k);
-    const monthAv = (c.metaMonth>0) ? (c.obtMonth/c.metaMonth)*100 : null;
-
-    const weekCells = weekCols.map(w=>{
-      const cell = c.weeks[w] || {};
-      const meta = cell.meta==null ? "—" : (Number(cell.meta).toFixed(2) + (cell.note?(" "+cell.note):""));
-      const obt  = cell.obt==null ? "—" : Number(cell.obt).toFixed(2);
-      const av   = cell.av==null ? "—" : Number(cell.av).toFixed(2)+"%";
-      return `<td class="num">${meta}</td><td class="num">${obt}</td><td class="num">${av}</td>`;
-    }).join("");
-
-    return `
-      <tr>
-        <td><b>${c.label}</b></td>
-        ${weekCells}
-        <td class="num"><b>${c.metaMonth ? c.metaMonth.toFixed(2) : "—"}</b></td>
-        <td class="num"><b>${c.obtMonth ? c.obtMonth.toFixed(2) : "—"}</b></td>
-        <td class="num"><b>${monthAv==null ? "—" : monthAv.toFixed(2)+"%"}</b></td>
-      </tr>
-    `;
-  }).join("");
-
-  const advanceRow = `
-    <tr>
-      <td><b>Avance General</b></td>
-      ${weekCols.map(w=>{
-        const wk = weekKpis.find(x=>x.w===w);
-        const v = wk ? wk.kpi.toFixed(2)+"%" : "—";
-        return `<td class="num" colspan="3"><b>${v}</b></td>`;
-      }).join("")}
-      <td class="num" colspan="3"><b>${avgMonth==null ? "—" : avgMonth.toFixed(2)+"%"}</b></td>
-    </tr>
-  `;
-
-  return `
-    <div style="overflow:auto;border:1px solid var(--border);border-radius:12px">
-      <table style="min-width:980px">
-        <thead>
-          <tr>
-            <th>Concepto</th>
-            ${weekCols.map(headWeek).join("")}
-            <th colspan="3" class="right">Mes (suma semanas)</th>
-          </tr>
-          <tr>
-            <th></th>
-            ${weekCols.map(()=> `${subHead("Meta")}${subHead("Obtenido")}${subHead("Avance")}`).join("")}
-            ${subHead("Meta")}${subHead("Obtenido")}${subHead("Avance")}
-          </tr>
-        </thead>
-        <tbody>
-          ${rowsHtml}
-          ${advanceRow}
-        </tbody>
-      </table>
-    </div>
-    <p class="hint" style="margin-top:8px">Esto es la matriz por semanas (referencia). El mensual “exacto” lo toma del pegado guardado en “Mensual (acumulado)”.</p>
-  `;
-}
-
-/** ==============================
- *  Resultados tab builder
- *  ============================== */
-function buildResults(){
-  const year = String($("resYear").value||"");
-  const month = String($("resMonth").value||"");
-  const company = $("resCompany").value;
-
-  const data = loadData();
-  const bucket = (((data||{})[year]||{})[month]||{});
-
-  const monthlyTbody = $("cmpMonthly").querySelector("tbody");
-  monthlyTbody.innerHTML="";
-
-  function getMonthlyRec(companyName){
-    return bucket[makeKey(companyName, "mes")] || null;
-  }
-
-  function countWeeksUsed(companyName){
-    let n=0;
-    for(let w=1; w<=5; w++){
-      const rec = bucket[makeKey(companyName, String(w))];
-      if(!rec) continue;
-      const pc = getParsedCompanyFromRec(rec);
-      if(asArray(pc.rows).length) n++;
-    }
-    return n;
-  }
-
-  function aggregateMonthlyConcepts(companyName){
-    const recM = getMonthlyRec(companyName);
-    if(recM){
-      const pcM = getParsedCompanyFromRec(recM);
-      const rowsM = asArray(pcM.rows);
-      if(rowsM.length){
-        return {
-          source: "mensual",
-          rows: rowsM,
-          weeksUsed: countWeeksUsed(companyName),
-          kpiMonth: pcM?.totals?.kpi ?? null
-        };
-      }
-    }
-
-    const kpis=[];
-    const map = new Map();
-    let weeksUsed=0;
-
-    for(let w=1; w<=5; w++){
-      const rec = bucket[makeKey(companyName, String(w))];
-      if(!rec) continue;
-      const pc = getParsedCompanyFromRec(rec);
-      const rows = asArray(pc.rows);
-      if(!rows.length) continue;
-
-      weeksUsed++;
-      const kpi = pc?.totals?.kpi ?? null;
-      if(kpi!=null && isFinite(kpi)) kpis.push(kpi);
-
-      rows.forEach(r=>{
-        const key=r.concept;
-        if(!key) return;
-        if(!map.has(key)) map.set(key, {metaSum:0, obtainedSum:0, metaNote:r.metaNote||null});
-        const o=map.get(key);
-        o.metaSum += (r.meta||0);
-        o.obtainedSum += (r.obtained||0);
-        if(r.metaNote) o.metaNote = r.metaNote;
-      });
-    }
-
-    const rows = [...map.entries()].map(([concept,o])=>{
-      const avance = o.metaSum>0 ? (o.obtainedSum/o.metaSum)*100 : null;
-      return {concept, meta:o.metaSum, obtained:o.obtainedSum, avance, metaNote:o.metaNote};
-    });
-
-    const kpiAvg = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
-
-    return { source:"semanas", rows, weeksUsed, kpiMonth: kpiAvg };
-  }
-
-  function employeeEfficiencyByCompany(companyName){
-    const recM = getMonthlyRec(companyName);
-    if(recM){
-      const peM = getParsedEmployeesFromRec(recM);
-      const empsM = asArray(peM.employees).filter(e=>e?.calif!=null && isFinite(e.calif));
-      const sum = empsM.reduce((s,e)=>s+e.calif,0);
-      const count = empsM.length;
-      return {avg: count ? (sum/count) : null, count};
-    }
-
-    let sum=0, count=0;
-    for(let w=1; w<=5; w++){
-      const rec = bucket[makeKey(companyName, String(w))];
-      if(!rec) continue;
-      const pe = getParsedEmployeesFromRec(rec);
-      const emps = asArray(pe.employees);
-      emps.forEach(e=>{
-        if(e?.calif==null || !isFinite(e.calif)) return;
-        sum += e.calif; count += 1;
-      });
-    }
-    const avg = count ? (sum/count) : null;
-    return {avg, count};
-  }
-
-  const monthlyRows = COMPANIES.map(c=>{
-    const agg = aggregateMonthlyConcepts(c);
-    return {company:c, kpi:agg.kpiMonth, weeks:agg.weeksUsed, source:agg.source};
-  }).sort((a,b)=>(b.kpi??-1)-(a.kpi??-1));
-
-  monthlyRows.forEach(r=>{
-    const recM = getMonthlyRec(r.company);
-    const pcM = recM ? getParsedCompanyFromRec(recM) : null;
-    const monthlyBlock = (pcM && asArray(pcM.rows).length) ? buildMonthlyCompanyTableHTML(pcM) : `<div class="msg warn">No hay pegado mensual. Usando semanas como referencia.</div>`;
-    const weeklyMatrix = buildWeeklyMatrixHTML(r.company, bucket);
-
-    const tr=document.createElement("tr");
-    tr.innerHTML = `
-      <td>${r.company}</td>
-      <td class="num">${fmtPct(r.kpi)}</td>
-      <td class="num">${r.weeks}</td>
-      <td>
-        <details>
-          <summary style="cursor:pointer;font-weight:900">Desglose</summary>
-          <div style="padding:10px 0">
-            ${monthlyBlock}
-            <div style="height:10px"></div>
-            ${weeklyMatrix}
-          </div>
-        </details>
-      </td>
-    `;
-    monthlyTbody.appendChild(tr);
-  });
-
-  const matrixBox = $("companyMatrixBox");
-  const recSelM = getMonthlyRec(company);
-  const pcSelM = recSelM ? getParsedCompanyFromRec(recSelM) : null;
-
-  let htmlSel = "";
-  if(pcSelM && asArray(pcSelM.rows).length){
-    htmlSel += `<div class="msg ok">✅ Esta empresa tiene “Mensual (acumulado)” guardado. KPI mensual: <b>${fmtPct(pcSelM?.totals?.kpi)}</b></div>`;
-    htmlSel += `<div style="margin-top:10px">${buildMonthlyCompanyTableHTML(pcSelM)}</div>`;
-    htmlSel += `<div style="height:12px"></div>`;
-  }else{
-    htmlSel += `<div class="msg warn">No hay “Mensual (acumulado)” guardado para esta empresa. Mostrando referencia por semanas.</div>`;
-  }
-  htmlSel += `<div style="margin-top:10px">${buildWeeklyMatrixHTML(company, bucket)}</div>`;
-  matrixBox.innerHTML = htmlSel;
-
-  const weeksTbody = $("resWeeksTable").querySelector("tbody");
-  weeksTbody.innerHTML="";
-  const kpis=[];
-  let hasAny=false;
-
-  for(let w=1; w<=5; w++){
-    const rec = bucket[makeKey(company, String(w))];
-    if(!rec) continue;
-
-    const pc = getParsedCompanyFromRec(rec);
-    const rows = asArray(pc.rows);
-    const kpi = pc?.totals?.kpi ?? null;
-
-    if(rows.length===0 && (kpi==null || !isFinite(kpi))) continue;
-    hasAny=true;
-
-    if(kpi!=null && isFinite(kpi)) kpis.push(kpi);
-
-    const desgloseHTML = rows.length ? `
-      <details>
-        <summary style="cursor:pointer;font-weight:900">Ver</summary>
-        <div style="padding:10px 0">
-          <div style="max-height:240px;overflow:auto;border:1px solid var(--border);border-radius:12px">
-            <table style="width:100%;border-collapse:collapse">
-              <thead>
-                <tr>
-                  <th>Concepto</th>
-                  <th class="right">Meta</th>
-                  <th class="right">Obtenido</th>
-                  <th class="right">Avance%</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${rows.map(r=>`
-                  <tr>
-                    <td>${r.concept}</td>
-                    <td class="num">${r.meta==null?"—":(Number(r.meta).toFixed(2)+(r.metaNote?(" "+r.metaNote):""))}</td>
-                    <td class="num">${r.obtained==null?"—":Number(r.obtained).toFixed(2)}</td>
-                    <td class="num">${r.avance==null?"—":Number(r.avance).toFixed(2)+"%"}</td>
-                  </tr>
-                `).join("")}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </details>
-    ` : `<span class="small">Sin conceptos</span>`;
-
-    const tr=document.createElement("tr");
-    tr.innerHTML = `
-      <td>Semana ${w}</td>
-      <td class="mono">${(rec.start||"—")} → ${(rec.end||"—")}</td>
-      <td class="num">${fmtPct(kpi)}</td>
-      <td class="num">${rows.length}</td>
-      <td>${desgloseHTML}</td>
-    `;
-    weeksTbody.appendChild(tr);
-  }
-
-  const aggSel = (function(){
-    // reutiliza la misma lógica de aggregateMonthlyConcepts sin duplicar demasiado:
-    const recM = bucket[makeKey(company, "mes")] || null;
-    if(recM){
-      const pcM = getParsedCompanyFromRec(recM);
-      const rowsM = asArray(pcM.rows);
-      if(rowsM.length){
-        return {source:"mensual", kpiMonth: pcM?.totals?.kpi ?? null};
-      }
-    }
-    const avgKpi = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
-    return {source:"semanas", kpiMonth: avgKpi};
-  })();
-
-  if(aggSel.source==="mensual"){
-    $("resCompanyKpi").textContent = "Mes capturado: " + fmtPct(aggSel.kpiMonth);
-  }else{
-    $("resCompanyKpi").textContent = hasAny ? ("Promedio semanas: " + fmtPct(aggSel.kpiMonth)) : "";
-  }
-
-  const viewEmp = $("empWeekView") ? $("empWeekView").value : "mes";
-  let empRank=[];
-
-  if(viewEmp==="mes"){
-    const recM = bucket[makeKey(company, "mes")] || null;
-    if(recM){
-      const peM = getParsedEmployeesFromRec(recM);
-      const empsM = asArray(peM.employees).filter(e=>e?.calif!=null && isFinite(e.calif));
-      empRank = empsM
-        .map(e=>({name:e.name, avg:e.calif, weeks:1}))
-        .sort((a,b)=>b.avg-a.avg);
+/** ✅ FIX NÚMEROS: no confundir (70%) con columnas */
+function safeNum(input){
+  if(input==null) return null;
+  let s = String(input).trim();
+  if(!s) return null;
+  if(/^nan\b/i.test(s)) return null;
+
+  // limpia todo menos dígitos, . , y -
+  s = s.replace(/\s+/g,"");
+  s = s.replace(/[^0-9.,\-]/g,"");
+  if(!s || s==="-" || s==="." || s===",") return null;
+
+  // si hay coma y punto, asume el último separador como decimal
+  const hasDot = s.includes(".");
+  const hasComma = s.includes(",");
+  if(hasDot && hasComma){
+    if(s.lastIndexOf(".") > s.lastIndexOf(",")){
+      // decimal con punto, comas miles
+      s = s.replace(/,/g,"");
     }else{
-      empRank = [];
+      // decimal con coma, puntos miles
+      s = s.replace(/\./g,"");
+      s = s.replace(/,/g,".");
     }
-  }else{
-    const rec = bucket[makeKey(company, String(viewEmp))];
-    const pe = rec ? getParsedEmployeesFromRec(rec) : {employees:[]};
-    const emps = asArray(pe.employees);
-    empRank = emps.filter(e=>e?.calif!=null && isFinite(e.calif))
-      .map(e=>({name:e.name, avg:e.calif, weeks:1}))
-      .sort((a,b)=>b.avg-a.avg);
+  }else if(hasComma && !hasDot){
+    // si no hay punto, usa coma como decimal
+    s = s.replace(/,/g,".");
   }
 
-  const empTbody = $("resEmpRank").querySelector("tbody");
-  empTbody.innerHTML="";
-  empRank.forEach((r,i)=>{
-    const tr=document.createElement("tr");
-    tr.innerHTML = `<td>${i+1}</td><td>${r.name}</td><td class="num">${fmtPct(r.avg)}</td><td class="num">${r.weeks}</td>`;
-    empTbody.appendChild(tr);
-  });
-  $("resEmpCount").textContent = empRank.length ? (empRank.length + " empleados") : (viewEmp==="mes" ? "Sin mensual capturado" : "");
-
-  const weekFilter = $("cmpWeekFilter") ? $("cmpWeekFilter").value : "all";
-  const cmpBody = $("cmpWeekly").querySelector("tbody");
-  cmpBody.innerHTML="";
-
-  function renderWeek(w){
-    const rows=[];
-    for(const c of COMPANIES){
-      const rec = bucket[makeKey(c, String(w))];
-      if(!rec) continue;
-      const pc = getParsedCompanyFromRec(rec);
-      const kpi = pc?.totals?.kpi ?? null;
-      if(kpi==null || !isFinite(kpi)) continue;
-      rows.push({week:w, company:c, kpi});
-    }
-    rows.sort((a,b)=>(b.kpi)-(a.kpi));
-    rows.forEach(r=>{
-      const tr=document.createElement("tr");
-      tr.innerHTML = `<td>Semana ${r.week}</td><td>${r.company}</td><td class="num">${fmtPct(r.kpi)}</td>`;
-      cmpBody.appendChild(tr);
-    });
-  }
-
-  if(weekFilter==="all"){
-    for(let w=1; w<=5; w++) renderWeek(w);
-  }else{
-    renderWeek(Number(weekFilter));
-  }
-
-  const viewGlobal = $("globalWeekView") ? $("globalWeekView").value : "mes";
-  const gBody = $("globalRank").querySelector("tbody");
-  gBody.innerHTML="";
-
-  let globalRank=[];
-
-  if(viewGlobal==="mes"){
-    const list=[];
-    for(const c of COMPANIES){
-      const recM = bucket[makeKey(c, "mes")] || null;
-      if(!recM) continue;
-      const peM = getParsedEmployeesFromRec(recM);
-      const empsM = asArray(peM.employees).filter(e=>e?.calif!=null && isFinite(e.calif));
-      empsM.forEach(e=>{
-        list.push({name:e.name, company:c, avg:e.calif, weeks:1});
-      });
-    }
-    globalRank = list.sort((a,b)=>b.avg-a.avg);
-  }else{
-    const w = String(viewGlobal);
-    const list=[];
-    for(const c of COMPANIES){
-      const rec = bucket[makeKey(c, w)];
-      if(!rec) continue;
-      const pe = getParsedEmployeesFromRec(rec);
-      const emps = asArray(pe.employees);
-      emps.forEach(e=>{
-        if(e?.calif==null || !isFinite(e.calif)) return;
-        list.push({name:e.name, company:c, avg:e.calif, weeks:1});
-      });
-    }
-    globalRank = list.sort((a,b)=>b.avg-a.avg);
-  }
-
-  globalRank.forEach((r,i)=>{
-    const tr=document.createElement("tr");
-    tr.innerHTML = `<td>${i+1}</td><td>${r.name}</td><td>${r.company}</td><td class="num">${fmtPct(r.avg)}</td><td class="num">${r.weeks}</td>`;
-    gBody.appendChild(tr);
-  });
-
-  const bestBody = $("bestByCompany").querySelector("tbody");
-  bestBody.innerHTML="";
-  for(const c of COMPANIES){
-    const recM = bucket[makeKey(c, "mes")] || null;
-    let best = null;
-
-    if(recM){
-      const peM = getParsedEmployeesFromRec(recM);
-      const empsM = asArray(peM.employees).filter(e=>e?.calif!=null && isFinite(e.calif));
-      empsM.forEach(e=>{
-        if(!best || e.calif > best.calif) best = e;
-      });
-    }
-
-    const tr=document.createElement("tr");
-    if(!best){
-      tr.innerHTML = `<td>${c}</td><td>—</td><td class="num">—</td><td class="num">0</td>`;
-    }else{
-      tr.innerHTML = `<td>${c}</td><td>${best.name}</td><td class="num">${fmtPct(best.calif)}</td><td class="num">1</td>`;
-    }
-    bestBody.appendChild(tr);
-  }
-
-  // charts
-  (function(){
-    function aggregateMonthlyConcepts(companyName){
-      const recM = bucket[makeKey(companyName, "mes")] || null;
-      if(recM){
-        const pcM = getParsedCompanyFromRec(recM);
-        const rowsM = asArray(pcM.rows);
-        if(rowsM.length){
-          return {kpiMonth: pcM?.totals?.kpi ?? null};
-        }
-      }
-      const kpis=[];
-      for(let w=1; w<=5; w++){
-        const rec = bucket[makeKey(companyName, String(w))];
-        if(!rec) continue;
-        const pc = getParsedCompanyFromRec(rec);
-        const kpi = pc?.totals?.kpi ?? null;
-        if(kpi!=null && isFinite(kpi)) kpis.push(kpi);
-      }
-      const kpiAvg = kpis.length ? (kpis.reduce((a,b)=>a+b,0)/kpis.length) : null;
-      return {kpiMonth:kpiAvg};
-    }
-    function employeeEfficiencyByCompany(companyName){
-      const recM = bucket[makeKey(companyName, "mes")] || null;
-      if(recM){
-        const peM = getParsedEmployeesFromRec(recM);
-        const empsM = asArray(peM.employees).filter(e=>e?.calif!=null && isFinite(e.calif));
-        const sum = empsM.reduce((s,e)=>s+e.calif,0);
-        const count = empsM.length;
-        return {avg: count ? (sum/count) : null, count};
-      }
-      let sum=0, count=0;
-      for(let w=1; w<=5; w++){
-        const rec = bucket[makeKey(companyName, String(w))];
-        if(!rec) continue;
-        const pe = getParsedEmployeesFromRec(rec);
-        const emps = asArray(pe.employees);
-        emps.forEach(e=>{
-          if(e?.calif==null || !isFinite(e.calif)) return;
-          sum += e.calif; count += 1;
-        });
-      }
-      return {avg: count ? (sum/count) : null, count};
-    }
-    renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany});
-  })();
-
-  const anyMonthly = COMPANIES.some(c=> !!(bucket[makeKey(c, "mes")]));
-  if(!hasAny && !anyMonthly){
-    setMsg($("resMsg"), "No hay datos guardados para ese mes. Ve a Datos y guarda semanas o Mensual.", "warn");
-    $("resMsg").style.display="block";
-  } else {
-    $("resMsg").style.display="none";
-  }
-}
-
-/** ==============================
- *  Tabs
- *  ============================== */
-function showTab(name){
-  ["datos","resultados","config"].forEach(t=>{
-    $("tab-"+t).style.display = (t===name) ? "grid" : "none";
-  });
-  document.querySelectorAll(".tab").forEach(b=>{
-    b.classList.toggle("active", b.dataset.tab===name);
-  });
-}
-
-/** ==============================
- *  Init
- *  ============================== */
-(function init(){
-  fillCompanies($("companySelect"));
-  fillCompanies($("resCompany"));
-
-  document.querySelectorAll(".tab").forEach(b=>{
-    b.addEventListener("click", ()=>showTab(b.dataset.tab));
-  });
-
-  $("btnPreview").addEventListener("click", ()=>preview());
-  $("btnSave").addEventListener("click", ()=>{ preview(); saveWeek(); });
-  $("btnLoad").addEventListener("click", ()=>loadWeek());
-  $("btnClearWeek").addEventListener("click", ()=>clearWeekInputs());
-  $("btnBuild").addEventListener("click", ()=>buildResults());
-
-  $("btnExport").addEventListener("click", ()=>exportJSON());
-  $("btnImport").addEventListener("click", ()=> $("importFile").click());
-  $("importFile").addEventListener("change", (e)=>{
-    if(e.target.files && e.target.files[0]) importJSON(e.target.files[0]);
-    e.target.value="";
-  });
-  $("btnClearAll").addEventListener("click", ()=>clearAll());
-
-  if($("empWeekView")){
-    $("empWeekView").addEventListener("change", ()=>buildResults());
-  }
-  if($("cmpWeekFilter")){
-    $("cmpWeekFilter").addEventListener("change", ()=>buildResults());
-  }
-  if($("globalWeekView")){
-    $("globalWeekView").addEventListener("change", ()=>buildResults());
-  }
-
-  if($("btnOpenAllMonthly")){
-    $("btnOpenAllMonthly").addEventListener("click", (e)=>{
-      e.preventDefault(); e.stopPropagation();
-      setMonthlyBreakdowns(true);
-    });
-  }
-  if($("btnCloseAllMonthly")){
-    $("btnCloseAllMonthly").addEventListener("click", (e)=>{
-      e.preventDefault(); e.stopPropagation();
-      setMonthlyBreakdowns(false);
-    });
-  }
-
-  applyMode();
-  $("btnSaveConfig").addEventListener("click", ()=>{
-    const current = loadCfg();
-    const nextMode = $("modeSelect").value;
-    const pin = $("modePin").value || "";
-
-    if(nextMode==="admin" && current.pin){
-      const ask = prompt("PIN para entrar a Admin:");
-      if(ask !== current.pin){
-        setMsg($("cfgMsg"), "PIN incorrecto.", "bad");
-        $("cfgMsg").style.display="block";
-        applyMode();
-        return;
-      }
-    }
-
-    saveCfg({mode: nextMode, pin});
-    applyMode();
-    setMsg($("cfgMsg"), "Config guardada ✅", "ok");
-    $("cfgMsg").style.display="block";
-    setTimeout(()=> $("cfgMsg").style.display="none", 2000);
-  });
-
-  applyMode();
-})();
-</script>
-</body>
-</html>
-Si quieres, en tu próxima prueba haz esto: pega un caso donde antes te salía nan%, guarda, ve a Resultados y revisa el “KPI usado” en el preview/mes. Ya debe salir como suma de Obtenido % y no números raros.
-
-
-
-
-
-
-
-
-Dijiste:
-
-
-esta mal el codigo no da lo que necesito te adjunto en semana uno en seminuevo primer anillo ya con el codigo nuevo sale 67 cuando deberia de ser 6.7 te adjunto evidencia
-
-
-ChatGPT dijo:
-
-Pensado durante 7m 26s
-Tienes toda la razón: el 67 te sale porque el parser estaba “pescando” números que no son datos, en especial el (70%) de Entregas (y/o porcentajes de columnas de la derecha) y eso te infla el KPI.
-
-Ya lo corregí así:
-
-Ignora TODO lo que esté entre paréntesis al sacar números (ej. (70%) ya no se toma como “obtenido”).
-
-Detecta nan / NaN en el pegado.
-
-Solo cuando hay nan, el KPI se calcula como la suma de la columna “Obtenido %” (la de la derecha), ignorando los nan%.
-
-Con tu ejemplo: 0% + 6.7% + … + 0% = 6.7% ✅
-
-Aquí está el código completo ya con el fix integrado (cópialo tal cual y reemplaza tu archivo):
-
-html
-Copiar código
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Herrera | Resultados Semanales</title>
-
-  <!-- ✅ SOLO SE AGREGA ESTO PARA GRAFICAS -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-
-  <style>
-    :root{
-      --bg:#f4f4f5; --card:#fff; --muted:#6b7280; --border:#e5e7eb;
-      --text:#111827; --black:#0b0b0c; --soft:#fafafa; --ok:#16a34a; --warn:#a16207; --bad:#b91c1c;
-      --radius:16px;
-      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-    }
-    *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
-    .wrap{max-width:1200px;margin:0 auto;padding:20px}
-    .topbar{
-      display:flex;align-items:center;justify-content:space-between;gap:12px;
-      background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;
-    }
-    .brand h1{margin:0;font-size:22px}
-    .brand p{margin:4px 0 0;color:var(--muted);font-size:13px}
-    .tabs{display:flex;gap:8px;flex-wrap:wrap}
-    .tab{
-      border:1px solid var(--border);background:#fff;padding:10px 12px;border-radius:999px;cursor:pointer;
-      font-weight:600;font-size:13px;
-    }
-    .tab.active{background:var(--black);color:#fff;border-color:var(--black)}
-    .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
-    .grid{display:grid;gap:12px}
-    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
-    @media (max-width: 980px){.grid2,.grid3{grid-template-columns:1fr}}
-    label{display:block;font-size:12px;color:var(--muted);margin:0 0 6px}
-    select,input,textarea{
-      width:100%;padding:10px;border-radius:12px;border:1px solid var(--border);font-size:14px;background:#fff;
-    }
-    textarea{min-height:220px;font-family:var(--mono);font-size:12px}
-    .btnrow{display:flex;gap:10px;flex-wrap:wrap}
-    .btn{
-      padding:10px 14px;border-radius:12px;border:1px solid var(--border);background:#fff;cursor:pointer;font-weight:700;
-    }
-    .btn.black{background:var(--black);color:#fff;border-color:var(--black)}
-    .btn.ghost{background:transparent}
-    .btn:disabled{opacity:.45;cursor:not-allowed}
-    .hint{color:var(--muted);font-size:13px;margin:0}
-    .pill{display:inline-block;padding:4px 8px;border-radius:999px;border:1px solid var(--border);font-size:12px;color:var(--muted)}
-    .msg{padding:10px 12px;border-radius:12px;border:1px solid var(--border);background:var(--soft);font-size:13px}
-    .msg.ok{border-color:#bbf7d0;background:#f0fdf4;color:#14532d}
-    .msg.warn{border-color:#fde68a;background:#fffbeb;color:#713f12}
-    .msg.bad{border-color:#fecaca;background:#fef2f2;color:#7f1d1d}
-    table{width:100%;border-collapse:collapse}
-    th,td{padding:10px 8px;border-bottom:1px solid var(--border);font-size:13px;text-align:left;vertical-align:top}
-    th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-    td.num{text-align:right;font-variant-numeric:tabular-nums}
-    .sectionTitle{display:flex;align-items:center;justify-content:space-between;gap:8px}
-    .sectionTitle h2{margin:0;font-size:16px}
-    .small{font-size:12px;color:var(--muted)}
-    .split{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-    .kpi{display:flex;gap:10px;flex-wrap:wrap}
-    .kpi .box{border:1px solid var(--border);border-radius:14px;padding:10px 12px;background:#fff}
-    .kpi .box .t{font-size:12px;color:var(--muted)}
-    .kpi .box .v{font-size:18px;font-weight:800;margin-top:2px}
-    .right{text-align:right}
-    .hr{height:1px;background:var(--border);margin:10px 0}
-    .mono{font-family:var(--mono)}
-
-    /* ✅ SOLO PARA LAS GRAFICAS (NO TOCA LO DEMÁS) */
-    .chartWrap{border:1px solid var(--border);border-radius:14px;padding:12px;background:#fff}
-    .legendBox{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-    .dot{width:10px;height:10px;border-radius:999px;display:inline-block}
-  </style>
-</head>
-<body>
-<div class="wrap">
-
-  <div class="topbar">
-    <div class="brand">
-      <h1>Herrera | Resultados</h1>
-      <p>Admin pega datos por empresa/semana. Viewer solo ve resultados.</p>
-    </div>
-    <div class="tabs">
-      <button class="tab active" data-tab="datos">Datos</button>
-      <button class="tab" data-tab="resultados">Resultados</button>
-      <button class="tab" data-tab="config">Config</button>
-    </div>
-  </div>
-
-  <div style="height:12px"></div>
-
-  <!-- DATOS -->
-  <div id="tab-datos" class="grid">
-
-    <div class="card">
-      <div class="split">
-        <div>
-          <div class="pill" id="modePill">Modo: Admin</div>
-          <p class="hint">En <b>Datos</b> guardas textos por Empresa y Semana. Luego en <b>Resultados</b> se calculan rankings/comparativos.</p>
-          <p class="hint" style="margin-top:6px"><b>Nuevo:</b> puedes guardar también <b>Mensual (acumulado)</b> para que el KPI mensual y rankings del mes salgan EXACTOS del sistema.</p>
-        </div>
-        <div class="btnrow">
-          <button class="btn" id="btnExport">Exportar JSON</button>
-          <button class="btn" id="btnImport">Importar JSON</button>
-          <input id="importFile" type="file" accept="application/json" style="display:none" />
-          <button class="btn ghost" id="btnClearAll" title="Borra todo local">Borrar todo (local)</button>
-        </div>
-      </div>
-      <div id="msgTop" class="msg" style="display:none;margin-top:10px"></div>
-    </div>
-
-    <div class="card">
-      <div class="sectionTitle">
-        <h2>Entrada de datos</h2>
-        <div class="small">Guardado local automático</div>
-      </div>
-      <div class="hr"></div>
-
-      <div class="grid3">
-        <div>
-          <label>Empresa</label>
-          <select id="companySelect"></select>
-        </div>
-        <div>
-          <label>Año</label>
-          <input id="yearInput" type="number" value="2026" />
-        </div>
-        <div>
-          <label>Mes (1–12)</label>
-          <input id="monthInput" type="number" min="1" max="12" value="1" />
-        </div>
-      </div>
-
-      <div class="grid3">
-        <div>
-          <label>Semana del mes</label>
-          <select id="weekSelect">
-            <option value="1">Semana 1</option>
-            <option value="2">Semana 2</option>
-            <option value="3">Semana 3</option>
-            <option value="4">Semana 4</option>
-            <option value="5">Semana 5</option>
-            <option value="mes">Mensual (acumulado)</option>
-          </select>
-        </div>
-        <div>
-          <label>Fecha inicio (Lun)</label>
-          <input id="weekStart" type="date" />
-        </div>
-        <div>
-          <label>Fecha fin (Sáb / cierre)</label>
-          <input id="weekEnd" type="date" />
-        </div>
-      </div>
-
-      <div class="grid2">
-        <div>
-          <label>Pegado Empresa (tabla de conceptos)</label>
-          <textarea id="pasteCompany" placeholder="Pega aquí la tabla de empresa (Conceptos, Meta, Obtenido, ... Avance%)"></textarea>
-        </div>
-        <div>
-          <label>Pegado Empleados (bloques Agenda / Calificación)</label>
-          <textarea id="pasteEmployees" placeholder="Pega aquí los bloques de empleados (Agenda: ... Nombre ... Calificacion obtenida: ...)"></textarea>
-        </div>
-      </div>
-
-      <div class="btnrow">
-        <button class="btn" id="btnPreview">Previsualizar</button>
-        <button class="btn black" id="btnSave">Guardar</button>
-        <button class="btn" id="btnLoad">Cargar</button>
-        <button class="btn ghost" id="btnClearWeek">Limpiar cajas</button>
-      </div>
-
-      <div id="previewArea" class="grid" style="margin-top:12px;display:none">
-        <div class="grid2">
-          <div class="card" style="padding:14px">
-            <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Preview Empresa</h2><span class="small" id="companyKpiHint"></span></div>
-            <div id="companyPreviewMsg" class="msg" style="display:none;margin-top:10px"></div>
-            <div id="companyKpis" class="kpi" style="margin-top:10px"></div>
-            <div style="margin-top:10px;max-height:280px;overflow:auto;border:1px solid var(--border);border-radius:12px">
-              <table id="companyTable">
-                <thead>
-                  <tr>
-                    <th>Concepto</th><th class="right">Meta</th><th class="right">Obtenido</th><th class="right">Avance%</th>
-                  </tr>
-                </thead>
-                <tbody></tbody>
-              </table>
-            </div>
-          </div>
-
-          <div class="card" style="padding:14px">
-            <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Preview Empleados</h2><span class="small" id="empCount"></span></div>
-            <div id="empPreviewMsg" class="msg" style="display:none;margin-top:10px"></div>
-
-            <div style="margin-top:10px">
-              <div class="small" style="font-weight:700;color:var(--text)">Top 5 (calificación)</div>
-              <div id="top5" class="grid" style="gap:8px;margin-top:8px"></div>
-            </div>
-
-            <div style="margin-top:10px;max-height:280px;overflow:auto;border:1px solid var(--border);border-radius:12px">
-              <table id="empTable">
-                <thead>
-                  <tr><th>Empleado</th><th class="right">Agenda</th><th class="right">Calificación</th></tr>
-                </thead>
-                <tbody></tbody>
-              </table>
-            </div>
-
-          </div>
-        </div>
-      </div>
-
-      <p class="hint" style="margin-top:10px">
-        Tip: si quieres que el viewer vea EXACTAMENTE lo mismo, usa <b>Exportar JSON</b> (admin) y luego <b>Importar JSON</b> (viewer).
-      </p>
-    </div>
-
-  </div>
-
-  <!-- RESULTADOS -->
-  <div id="tab-resultados" class="grid" style="display:none">
-
-    <div class="card">
-      <div class="sectionTitle">
-        <h2>Resultados</h2>
-        <span class="small">Se calcula con lo guardado en “Datos”</span>
-      </div>
-      <div class="hr"></div>
-
-      <div class="grid3">
-        <div>
-          <label>Empresa</label>
-          <select id="resCompany"></select>
-        </div>
-        <div>
-          <label>Año</label>
-          <input id="resYear" type="number" value="2026" />
-        </div>
-        <div>
-          <label>Mes</label>
-          <input id="resMonth" type="number" min="1" max="12" value="1" />
-        </div>
-      </div>
-
-      <div class="btnrow">
-        <button class="btn black" id="btnBuild">Actualizar resultados</button>
-      </div>
-
-      <div id="resMsg" class="msg warn" style="display:none;margin-top:10px"></div>
-
-      <!-- ✅ GRAFICAS -->
-      <div class="card" style="padding:14px;margin-top:12px">
-        <div class="sectionTitle">
-          <h2 style="font-size:14px;margin:0">Gráficas (mes acumulado)</h2>
-          <span class="small">Si guardas “Mensual (acumulado)”, esto sale EXACTO</span>
-        </div>
-        <div class="hr"></div>
-
-        <div class="grid2">
-          <div>
-            <div class="sectionTitle">
-              <h2 style="font-size:14px;margin:0">Gráfica 1 · Ranking empresas (KPI% mes)</h2>
-              <span class="small">Mayor a menor</span>
-            </div>
-            <p class="hint" style="margin-top:6px">Usa KPI mensual capturado (Mensual) si existe; si no, usa promedio de semanas.</p>
-            <div class="chartWrap" style="margin-top:10px">
-              <canvas id="chartRankingKPI"></canvas>
-            </div>
-          </div>
-
-          <div>
-            <div class="sectionTitle">
-              <h2 style="font-size:14px;margin:0">Gráfica 2 · Eficiencia por Área (empleados)</h2>
-              <span class="small">Promedio % empleados</span>
-            </div>
-
-            <div class="legendBox" style="margin-top:8px">
-              <span class="small"><span class="dot" style="background:#16a34a"></span> Verde: &gt;70%</span>
-              <span class="small"><span class="dot" style="background:#f59e0b"></span> Amarillo: 40–69%</span>
-              <span class="small"><span class="dot" style="background:#dc2626"></span> Rojo: &lt;40%</span>
-              <span class="small"><span class="dot" style="background:#9ca3af"></span> Gris: sin datos</span>
-            </div>
-
-            <p class="hint" style="margin-top:6px">
-              Si existe “Mensual (acumulado)”, usa esos empleados del mes. Si no, promedia semanas.
-            </p>
-
-            <div class="chartWrap" style="margin-top:10px">
-              <canvas id="chartEfficiencyArea"></canvas>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Comparativo mensual -->
-      <div class="card" style="padding:14px;margin-top:12px">
-        <details id="cmpMonthlyDetails" open>
-          <summary style="cursor:pointer;list-style:none">
-            <div class="sectionTitle" style="align-items:center">
-              <h2 style="font-size:14px;margin:0">Comparativo mensual (todas las empresas)</h2>
-              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                <span class="small">Abrir/cerrar · dentro puedes ver “Desglose”</span>
-                <button class="btn" id="btnOpenAllMonthly" type="button" style="padding:8px 10px;border-radius:999px;font-size:12px">
-                  Abrir desgloses
-                </button>
-                <button class="btn" id="btnCloseAllMonthly" type="button" style="padding:8px 10px;border-radius:999px;font-size:12px">
-                  Cerrar desgloses
-                </button>
-              </div>
-            </div>
-          </summary>
-
-          <div style="margin-top:10px;max-height:420px;overflow:auto;border:1px solid var(--border);border-radius:12px">
-            <table id="cmpMonthly">
-              <thead>
-                <tr>
-                  <th>Empresa</th>
-                  <th class="right">KPI mes%</th>
-                  <th class="right">Semanas</th>
-                  <th>Desglose</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </details>
-      </div>
-
-      <!-- Desglose del mes -->
-      <div class="card" style="padding:14px;margin-top:12px">
-        <details id="companyMatrixDetails" open>
-          <summary style="cursor:pointer;font-weight:900">Desglose del mes</summary>
-          <div id="companyMatrixBox" style="margin-top:10px"></div>
-        </details>
-      </div>
-
-      <div class="grid2" style="margin-top:12px">
-        <div class="card" style="padding:14px">
-          <div class="sectionTitle">
-            <h2 style="font-size:14px;margin:0">Empresa (semanas)</h2>
-            <span class="small" id="resCompanyKpi"></span>
-          </div>
-          <div style="margin-top:10px;max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:12px">
-            <table id="resWeeksTable">
-              <thead>
-                <tr>
-                  <th>Semana</th>
-                  <th>Fechas</th>
-                  <th class="right">KPI%</th>
-                  <th class="right">Conceptos</th>
-                  <th>Desglose</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="card" style="padding:14px">
-          <div class="sectionTitle">
-            <h2 style="font-size:14px;margin:0">Ranking empleados</h2>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <span class="small" id="resEmpCount"></span>
-              <select id="empWeekView" style="padding:8px 10px;border-radius:999px;border:1px solid var(--border);font-size:12px">
-                <option value="mes" selected>Mes (capturado)</option>
-                <option value="1">Semana 1</option>
-                <option value="2">Semana 2</option>
-                <option value="3">Semana 3</option>
-                <option value="4">Semana 4</option>
-                <option value="5">Semana 5</option>
-              </select>
-            </div>
-          </div>
-
-          <div style="margin-top:10px;max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:12px">
-            <table id="resEmpRank">
-              <thead>
-                <tr><th>#</th><th>Empleado</th><th class="right">Promedio%</th><th class="right">Semanas</th></tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div class="grid2" style="margin-top:12px">
-        <div class="card" style="padding:14px">
-          <div class="sectionTitle">
-            <h2 style="font-size:14px;margin:0">Comparativo semanal (todas las empresas)</h2>
-            <select id="cmpWeekFilter" style="padding:8px 10px;border-radius:999px;border:1px solid var(--border);font-size:12px;width:auto">
-              <option value="all" selected>Todas</option>
-              <option value="1">Semana 1</option>
-              <option value="2">Semana 2</option>
-              <option value="3">Semana 3</option>
-              <option value="4">Semana 4</option>
-              <option value="5">Semana 5</option>
-            </select>
-          </div>
-          <div style="margin-top:10px;max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:12px">
-            <table id="cmpWeekly">
-              <thead>
-                <tr><th>Semana</th><th>Empresa</th><th class="right">KPI%</th></tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="card" style="padding:14px">
-          <div class="sectionTitle">
-            <h2 style="font-size:14px;margin:0">Ranking general (todas las empresas)</h2>
-            <select id="globalWeekView" style="padding:8px 10px;border-radius:999px;border:1px solid var(--border);font-size:12px;width:auto">
-              <option value="mes" selected>Mes (capturado)</option>
-              <option value="1">Semana 1</option>
-              <option value="2">Semana 2</option>
-              <option value="3">Semana 3</option>
-              <option value="4">Semana 4</option>
-              <option value="5">Semana 5</option>
-            </select>
-          </div>
-          <div style="margin-top:10px;max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:12px">
-            <table id="globalRank">
-              <thead>
-                <tr><th>#</th><th>Empleado</th><th>Empresa</th><th class="right">Promedio%</th><th class="right">Semanas</th></tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div class="card" style="padding:14px;margin-top:12px">
-        <div class="sectionTitle"><h2 style="font-size:14px;margin:0">Mejor vendedor por empresa (mes)</h2></div>
-        <div style="margin-top:10px;max-height:360px;overflow:auto;border:1px solid var(--border);border-radius:12px">
-          <table id="bestByCompany">
-            <thead>
-              <tr><th>Empresa</th><th>Empleado</th><th class="right">Promedio%</th><th class="right">Semanas</th></tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </div>
-
-    </div>
-  </div>
-
-  <!-- CONFIG -->
-  <div id="tab-config" class="grid" style="display:none">
-    <div class="card">
-      <div class="sectionTitle">
-        <h2>Config</h2>
-        <span class="small">Modo Admin/Viewer (solo para evitar edición accidental)</span>
-      </div>
-      <div class="hr"></div>
-
-      <div class="grid2">
-        <div>
-          <label>Modo</label>
-          <select id="modeSelect">
-            <option value="admin">Admin (puede guardar)</option>
-            <option value="viewer">Viewer (solo ver)</option>
-          </select>
-          <p class="hint" style="margin-top:8px">
-            Esto no es seguridad real (GitHub Pages no tiene backend), pero ayuda a que el viewer no edite por accidente.
-          </p>
-        </div>
-
-        <div>
-          <label>Clave simple (opcional)</label>
-          <input id="modePin" type="password" placeholder="Ej: 1234" />
-          <p class="hint" style="margin-top:8px">Si pones pin, al cambiar a Admin lo pedirá.</p>
-        </div>
-      </div>
-
-      <div class="btnrow">
-        <button class="btn black" id="btnSaveConfig">Guardar Config</button>
-      </div>
-
-      <div id="cfgMsg" class="msg ok" style="display:none;margin-top:10px"></div>
-    </div>
-  </div>
-
-</div>
-
-<script>
-/** ==============================
- *  Config / Constantes
- *  ============================== */
-const COMPANIES = [
-  'HERRERA MOTORS SUR',
-  'HERRERA MOTORS NORTE',
-  'SEMINUEVOS',
-  'EUROFRANCE AUTOS DE AGUASCALIENTES',
-  'AMERITALI AUTOS SA DE CV',
-  'SEMINUEVOS SUR',
-  'HERRERA MOTORS LEATS',
-  'LEATS SEMINUEVOS',
-  'SEMINUEVOS 1ER ANILLO',
-  'GAC',
-  'FLOTILLAS',
-  'CENTROS COMERCIALES',
-  'ENTRENAMIENTO',
-  'SU AUTO'
-];
-
-const STORAGE_KEY = "herrera_reportes_v1";
-const CFG_KEY = "herrera_cfg_v1";
-
-function $(id){ return document.getElementById(id); }
-function fmtPct(n){
-  if(n==null || !isFinite(n)) return "—";
-  return n.toFixed(2) + "%";
-}
-function safeNum(s){
-  if(s==null) return null;
-  const t = String(s).replace(/,/g,"").replace(/[^\d.\-]/g,"").trim();
-  if(!t) return null;
-  const n = Number(t);
+  const n = Number(s);
   return isFinite(n) ? n : null;
 }
 
@@ -2245,16 +554,6 @@ function normalizeLine(s){
   return String(s).replace(/\u00a0/g," ").trim();
 }
 
-// ✅ parse de porcentaje que tolera "nan" y valores sin %
-function parsePctAny(s){
-  if(s==null) return null;
-  const str = String(s).trim();
-  if(!str) return null;
-  if(/^nan\b/i.test(str)) return null;
-  const n = safeNum(str);
-  return (n==null || !isFinite(n)) ? null : n;
-}
-
 /** ==============================
  *  Modelo de datos guardado
  *  data[year][month][key(company||week)] = record
@@ -2276,20 +575,13 @@ function getBucket(data, year, month){
 function makeKey(company, week){ return company + "||" + week; }
 
 /** ==============================
- *  ✅ Parser Empresa (FIX NaN + ignora paréntesis)
+ *  ✅ Parser Empresa (FIX nan + (70%))
  *  ============================== */
 function parseCompanyPaste(text){
   const warnings=[], errors=[];
-  const rawLines = String(text||"")
-    .split(/\r?\n/)
-    .map(normalizeLine)
-    .filter(Boolean);
+  const rawLines = String(text||"").split(/\r?\n/).map(normalizeLine).filter(Boolean);
+  if(rawLines.length===0) return {rows:[], totals:{metaSum:0,obtainedSum:0,kpi:null}, warnings, errors:["Pegado de empresa vacío."]};
 
-  if(rawLines.length===0){
-    return {rows:[], totals:{metaSum:0,obtainedSum:0,kpi:null}, warnings, errors:["Pegado de empresa vacío."]};
-  }
-
-  // Header detect
   let startIdx = rawLines.findIndex(l=>{
     const x=l.toLowerCase();
     return x.includes("concept") && x.includes("meta") && x.includes("obten");
@@ -2299,63 +591,20 @@ function parseCompanyPaste(text){
 
   const rows=[];
   let kpiReported=null;
-  let hasNan=false;
+  let nanFound=false;
 
   for(let i=startIdx;i<rawLines.length;i++){
     const line = rawLines[i];
-    if(/\bnan\b/i.test(line)) hasNan=true;
 
-    // Si es TSV (copiado de tabla web), es MUCHO más confiable.
-    if(line.includes("\t")){
-      const cells = line.split("\t").map(c=>String(c||"").trim());
-      // Si es header en TSV, sáltalo
-      const c0 = (cells[0]||"").toLowerCase();
-      if(c0.includes("concept") && cells.some(c=>String(c).toLowerCase().includes("meta")) && cells.some(c=>String(c).toLowerCase().includes("obten"))){
-        continue;
-      }
-
-      // Footer típico: última fila sin concepto (a veces queda vacío)
-      if(!cells[0] && cells.some(c=>/\b(nan|[0-9])/.test(String(c)))){
-        const firstPct = cells.map(parsePctAny).find(x=>x!=null && isFinite(x));
-        if(firstPct!=null){ kpiReported = firstPct; }
-        continue;
-      }
-
-      // Data row
-      const concept = (cells[0]||"").trim();
-      if(!concept) continue;
-
-      const metaRaw = cells[1] || "";
-      const obtRaw  = cells[2] || "";
-      const obtPctRaw = cells[3] || "";   // "Obtenido" %
-      const metaPctRaw = cells[4] || "";  // "Meta" % (a veces sin %)
-      const avanceRaw  = cells[5] || cells[cells.length-1] || "";
-
-      const noteMatch = metaRaw.match(/\(([^)]+)\)/);
-      const metaNote = noteMatch ? ("(" + noteMatch[1].trim() + ")") : null;
-
-      const meta = safeNum(metaRaw.replace(/\([^)]*\)/g," "));
-      const obtained = safeNum(obtRaw);
-
-      const obtainedPct = parsePctAny(obtPctRaw);
-      const metaPct = parsePctAny(metaPctRaw);
-      const avance = parsePctAny(avanceRaw);
-
-      rows.push({concept, meta, obtained, avance, metaNote, obtainedPct, metaPct});
+    // Detect KPI footer tipo: "45.67% - ...."
+    const footer = line.match(/^\s*([0-9]+(?:[.,][0-9]+)?)\s*%\s+/);
+    if(footer && line.includes("-")){
+      kpiReported = safeNum(footer[1]);
       continue;
     }
 
-    // ---- fallback "no TSV": regex robusto
-    // Detectar footer: línea sin letras (excepto "nan") con % al inicio
-    const lineNoNanWord = line.replace(/nan/ig,"").trim();
-    const pctTokensFooter = line.replace(/\([^)]*\)/g," ").match(/(?:nan|[0-9]+(?:\.[0-9]+)?)\s*%/gi) || [];
-    if(pctTokensFooter.length && !/[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(lineNoNanWord)){
-      // si la primera es número, es KPI reportado; si es nan, solo marcamos hasNan.
-      const first = pctTokensFooter[0];
-      const v = parsePctAny(first);
-      if(v!=null){ kpiReported = v; }
-      continue;
-    }
+    // Si hay nan% en cualquier parte, activamos modo fallback KPI
+    if(/nan\s*%/i.test(line)) nanFound = true;
 
     const conceptMatch = line.match(/^\s*([A-Za-zÁÉÍÓÚÑáéíóúñ][^0-9]*)\s+/);
     if(!conceptMatch) continue;
@@ -2365,28 +614,57 @@ function parseCompanyPaste(text){
 
     const afterConcept = line.slice(conceptMatch[0].length);
 
-    // meta note (ej: 0.0 (70%))
-    const metaMatch = afterConcept.match(/^([0-9]+(?:\.[0-9]+)?)\s*(\([^)]+\))?/);
-    const meta = metaMatch ? safeNum(metaMatch[1]) : null;
+    // metaNote: captura (70%) u otra nota, pero OJO: no la metemos a nums
+    const metaMatch = afterConcept.match(/^([0-9]+(?:[.,][0-9]+)?)\s*(\([^)]+\))?/);
     const metaNote = metaMatch && metaMatch[2] ? metaMatch[2].trim() : null;
 
-    // ✅ IMPORTANTÍSIMO: quitamos paréntesis ANTES de sacar números
-    const afterNoParens = afterConcept.replace(/\([^)]*\)/g," ");
-    const nums = afterNoParens.match(/[0-9]+(?:\.[0-9]+)?/g) || [];
-    const metaFromNums = nums.length>=1 ? safeNum(nums[0]) : meta;
+    // ❗ limpiamos paréntesis para que (70%) NO se vuelva "Obtenido"
+    const afterClean = afterConcept.replace(/\([^)]*\)/g, " ");
+
+    // nums: meta y obtenido reales (primeras 2 columnas numéricas)
+    const nums = afterClean.match(/-?\d+(?:[.,]\d+)?/g) || [];
+    const meta = nums.length>=1 ? safeNum(nums[0]) : null;
     const obtained = nums.length>=2 ? safeNum(nums[1]) : null;
 
-    // Porcentajes: quitamos paréntesis para que (70%) NO se vuelva "Obtenido%"
-    const lineNoParens = line.replace(/\([^)]*\)/g," ");
-    const pctTokens = lineNoParens.match(/(?:nan|[0-9]+(?:\.[0-9]+)?)\s*%/gi) || [];
-    let obtainedPct=null;
-    let avance=null;
-    if(pctTokens.length){
-      obtainedPct = parsePctAny(pctTokens[0]);                 // Obtenido%
-      avance = parsePctAny(pctTokens[pctTokens.length-1]);     // Avance%
+    // percent tokens SIN paréntesis (para ignorar el 70% de la nota)
+    const lineNoParens = line.replace(/\([^)]*\)/g, " ");
+    const pctTokens = lineNoParens.match(/(?:nan|-?\d+(?:[.,]\d+)?)\s*%/gi) || [];
+
+    function parsePctToken(tok){
+      if(!tok) return {val:null, isNan:false};
+      if(/nan/i.test(tok)) return {val:null, isNan:true};
+      return {val: safeNum(tok), isNan:false};
     }
 
-    rows.push({concept, meta: metaFromNums ?? meta, obtained, avance, metaNote, obtainedPct});
+    let obtainedPct=null;
+    let avance=null;
+    let rowNan=false;
+
+    // Estructura típica:
+    // - 3 tokens: Obtenido% | Meta% | Avance%
+    // - 2 tokens: Obtenido% | Avance%
+    // - 1 token: lo tratamos como Obtenido%
+    if(pctTokens.length>=1){
+      const p0 = parsePctToken(pctTokens[0]);
+      obtainedPct = p0.val;
+      rowNan = rowNan || p0.isNan;
+    }
+    if(pctTokens.length>=3){
+      const p1 = parsePctToken(pctTokens[1]); // meta% (no lo usamos)
+      rowNan = rowNan || p1.isNan;
+      const p2 = parsePctToken(pctTokens[2]);
+      avance = p2.val;
+      rowNan = rowNan || p2.isNan;
+    }else if(pctTokens.length===2){
+      const p1 = parsePctToken(pctTokens[1]);
+      avance = p1.val;
+      rowNan = rowNan || p1.isNan;
+    }
+
+    // Si el row traía nan% en texto y no lo capturó token, marcamos
+    if(/nan\s*%/i.test(lineNoParens)) rowNan = true;
+
+    rows.push({concept, meta, obtained, avance, metaNote, obtainedPct, hasNan: rowNan});
   }
 
   if(rows.length===0) errors.push("No detecté filas de conceptos. Revisa el pegado.");
@@ -2394,34 +672,25 @@ function parseCompanyPaste(text){
   const metaSum = rows.reduce((a,r)=>a+(r.meta||0),0);
   const obtainedSum = rows.reduce((a,r)=>a+(r.obtained||0),0);
 
-  // KPI alternativo: suma de "Obtenido%" (columna de la derecha)
-  const sumObtPct = rows.reduce((a,r)=>a+((r.obtainedPct!=null && isFinite(r.obtainedPct)) ? r.obtainedPct : 0),0);
-  const hasAnyObtPct = rows.some(r=>r.obtainedPct!=null && isFinite(r.obtainedPct));
-
+  // KPI normal (por sums)
   const kpiCalc = metaSum>0 ? (obtainedSum/metaSum)*100 : null;
 
-  // ✅ REGLA QUE PEDISTE:
-  // Si hay nan en el pegado -> KPI = suma de Obtenido%
-  // Si NO hay nan -> KPI = el reportado si existe; si no, KPI calculado tradicional (como antes)
-  let kpi = null;
-  let kpiMode = "calc_ratio";
+  // ✅ KPI fallback SOLO si hay nan: suma de "Obtenido %"
+  const sumObtainedPct = rows.reduce((a,r)=>a+((r.obtainedPct!=null && isFinite(r.obtainedPct)) ? r.obtainedPct : 0),0);
+  const anyNan = nanFound || rows.some(r=>r.hasNan);
 
+  let kpi = null;
   if(kpiReported!=null && isFinite(kpiReported)){
     kpi = kpiReported;
-    kpiMode = "reported";
-  }else if(hasNan && hasAnyObtPct){
-    kpi = sumObtPct;
-    kpiMode = "sum_obtenido_pct_nan";
+  }else if(anyNan){
+    kpi = sumObtainedPct;
+    warnings.push("Detecté nan%. KPI ajustado: suma de 'Obtenido %' (ignorando nan).");
   }else{
     kpi = kpiCalc;
-    if(kpiReported==null) warnings.push("No detecté KPI reportado (footer). Usaré KPI calculado.");
+    warnings.push("No detecté KPI reportado (footer). Usaré KPI calculado.");
   }
 
-  return {
-    rows,
-    totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported, sumObtPct, kpiMode, hasNan},
-    warnings, errors
-  };
+  return { rows, totals:{metaSum, obtainedSum, kpi, kpiCalc, kpiReported, sumObtainedPct, anyNan}, warnings, errors };
 }
 
 /** ==============================
@@ -2459,8 +728,8 @@ function parseEmployeesPaste(text){
 
     let calif=null;
     for(const l of block){
-      const m=l.match(/^calificacion\s+obtenida:\s*([0-9]+(?:\.[0-9]+)?)\s*%/i);
-      if(m){ calif=Number(m[1]); break; }
+      const m=l.match(/^calificacion\s+obtenida:\s*([0-9]+(?:[.,][0-9]+)?)\s*%/i);
+      if(m){ calif=safeNum(m[1]); break; }
     }
 
     employees.push({name, agenda:agendaVal, calif});
@@ -2791,15 +1060,12 @@ function renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany}){
  *  ============================== */
 const asArray = (x)=> Array.isArray(x) ? x : [];
 
+/** ✅ FIX IMPORTANTE: SIEMPRE re-parsear desde el texto guardado */
 function getParsedCompanyFromRec(rec){
-  const parsed = rec?.parsedCompany;
-  if(parsed && Array.isArray(parsed.rows) && parsed.rows.length>0) return parsed;
   const text = rec?.companyText || "";
   return parseCompanyPaste(text);
 }
 function getParsedEmployeesFromRec(rec){
-  const parsed = rec?.parsedEmployees;
-  if(parsed && Array.isArray(parsed.employees) && parsed.employees.length>0) return parsed;
   const text = rec?.employeeText || "";
   return parseEmployeesPaste(text);
 }
@@ -3101,7 +1367,7 @@ function buildResults(){
   htmlSel += `<div style="margin-top:10px">${buildWeeklyMatrixHTML(company, bucket)}</div>`;
   matrixBox.innerHTML = htmlSel;
 
-  // Empresa por semanas (igual)
+  // Empresa por semanas
   const weeksTbody = $("resWeeksTable").querySelector("tbody");
   weeksTbody.innerHTML="";
   const kpis=[];
@@ -3161,7 +1427,6 @@ function buildResults(){
     weeksTbody.appendChild(tr);
   }
 
-  // KPI mostrado arriba: si hay mensual capturado, úsalo; si no, promedio semanas
   const aggSel = aggregateMonthlyConcepts(company);
   if(aggSel.source==="mensual"){
     $("resCompanyKpi").textContent = "Mes capturado: " + fmtPct(aggSel.kpiMonth);
@@ -3170,7 +1435,7 @@ function buildResults(){
     $("resCompanyKpi").textContent = hasAny ? ("Promedio semanas: " + fmtPct(avgKpi)) : "";
   }
 
-  // Ranking empleados: Mes = del pegado mensual si existe; Semana = semanal
+  // Ranking empleados
   const viewEmp = $("empWeekView") ? $("empWeekView").value : "mes";
   let empRank=[];
 
@@ -3183,7 +1448,7 @@ function buildResults(){
         .map(e=>({name:e.name, avg:e.calif, weeks:1}))
         .sort((a,b)=>b.avg-a.avg);
     }else{
-      empRank = []; // sin mensual capturado
+      empRank = [];
     }
   }else{
     const rec = bucket[makeKey(company, String(viewEmp))];
@@ -3203,7 +1468,7 @@ function buildResults(){
   });
   $("resEmpCount").textContent = empRank.length ? (empRank.length + " empleados") : (viewEmp==="mes" ? "Sin mensual capturado" : "");
 
-  // Comparativo semanal (igual)
+  // Comparativo semanal
   const weekFilter = $("cmpWeekFilter") ? $("cmpWeekFilter").value : "all";
   const cmpBody = $("cmpWeekly").querySelector("tbody");
   cmpBody.innerHTML="";
@@ -3232,7 +1497,7 @@ function buildResults(){
     renderWeek(Number(weekFilter));
   }
 
-  // Ranking general: Mes = de los mensuales capturados por empresa
+  // Ranking general
   const viewGlobal = $("globalWeekView") ? $("globalWeekView").value : "mes";
   const gBody = $("globalRank").querySelector("tbody");
   gBody.innerHTML="";
@@ -3273,7 +1538,7 @@ function buildResults(){
     gBody.appendChild(tr);
   });
 
-  // Mejor vendedor por empresa (mes): usa mensual capturado
+  // Mejor vendedor por empresa (mes)
   const bestBody = $("bestByCompany").querySelector("tbody");
   bestBody.innerHTML="";
   for(const c of COMPANIES){
@@ -3299,7 +1564,6 @@ function buildResults(){
 
   renderCharts({aggregateMonthlyConcepts, employeeEfficiencyByCompany});
 
-  // Aviso
   const anyMonthly = COMPANIES.some(c=> !!getMonthlyRec(c));
   if(!hasAny && !anyMonthly){
     setMsg($("resMsg"), "No hay datos guardados para ese mes. Ve a Datos y guarda semanas o Mensual.", "warn");
@@ -3397,3 +1661,4 @@ function showTab(name){
 </script>
 </body>
 </html>
+
